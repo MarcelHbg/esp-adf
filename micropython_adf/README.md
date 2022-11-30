@@ -4,21 +4,102 @@
 
 To use this integration, please read the [documents](https://github.com/micropython/micropython) of `MicroPython` and the [README](https://github.com/micropython/micropython/tree/master/ports/esp32) of `MicroPython port for ESP32` first.
 
+### install xtensa cross compiler
+more information: <https://espressif-docs.readthedocs-hosted.com/projects/esp-idf/en/v3.3.5/get-started/linux-setup.html>
+
+```shell
+cd ~
+mkdir esp
+cd esp
+wget https://dl.espressif.com/dl/xtensa-esp32-elf-linux64-1.22.0-97-gc752ad5-5.2.0.tar.gz
+tar -xzf xtensa-esp32-elf-linux64-1.22.0-97-gc752ad5-5.2.0.tar.gz
+```
+
+- export to Paths
+
+```shell
+export PATH+=:$HOME/esp/xtensa-esp32-elf/bin
+```
+
 ## Build and flash
 
 To build the project, please follow the steps below:
 
-* Clone `ESP-ADF`, `ESP-IDF`, into your workspace and update all the submodules.
-* ESP-IDF support HASH '6ccb4cf5b7d1fdddb8c2492f9cbc926abaf230df'.
-* `export ADF_PATH={ your ESP-ADF's path }`
-* `export IDF_PATH={ your ESP-IDF's path }`
-* Clone `MicroPython` into `${ADF_PATH}/micropyton_adf`.
-* MicroPython support HASH '1f371947309c5ea6023b6d9065415697cbc75578'.
-* `cd ${IDF_PATH}`, and apply the patch of `${ADF_PATH}/idf_patches/idf_v3.3_freertos.patch`
-* `cd ${ADF_PATH}/micropyton_adf/micropython`, and apply the patch of `${ADF_PATH}/micropyton_adf/mpmake.patch`.
-* select your audio board in `${ADF_PATH}/micropyton_adf/sdkconfig.adf`.
-* `cd ${ADF_PATH}/micropyton_adf/micropython/mpy-cross`, run `make -j8`.
-* `cd ${ADF_PATH}/micropyton_adf/micropython/ports/esp32`, run `make deploy -j8 BOARD=GENERIC_SPIRAM BAUD=921600 PORT={ your uart port }`.
+- clone repos
+
+```shell
+cd ~
+mkdir uPy-adf
+cd uPy-adf
+git clone https://github.com/espressif/esp-adf.git
+git clone https://github.com/espressif/esp-idf.git
+```
+
+- setup Paths
+
+```shell
+export ADF_PATH=~/uPy-adf/esp-adf
+export IDF_PATH=~/uPy-adf/esp-idf
+```
+
+- setup esp-idf
+
+```shell
+cd $IDF_PATH
+git checkout 6ccb4cf5b7d1fdddb8c2492f9cbc926abaf230df
+git submodule update --init
+```
+
+- setup esp-adf (v2.2 needed because esp-adf-libs changed in higher versions)
+
+```shell
+cd $ADF_PATH
+git checkout d32cf8a4eeeadb99cb11d48a064a5020bf2b899a
+git submodule update --init
+```
+
+- setup micropython
+
+```shell
+cd $ADF_PATH/micropython_adf
+git clone https://github.com/micropython/micropython
+cd micropython
+git checkout 1f371947309c5ea6023b6d9065415697cbc75578
+git submodule update --init
+```
+
+- apply patches
+
+```shell
+cd $IDF_PATH
+git apply $ADF_PATH/idf_patches/idf_v3.3_freertos.patch
+```
+```shell
+cd $ADF_PATH/micropython_adf/micropython
+git apply $ADF_PATH/micropython_adf/mpmake.patch
+```
+
+- build
+
+```shell
+cd $ADF_PATH/micropython_adf/micropython/mpy-cross
+make
+```
+```shell
+cd $ADF_PATH/micropython_adf/micropython/ports/esp32
+make BOARD=GENERIC_SPIRAM
+```
+
+- flash
+using esptool.py for esp32 with SPIRAM
+
+```shell
+esptool.py --chip esp32 --port <YOUR_PORT> erase_flash
+```
+```shell
+cd $ADF_PATH/micropython_adf/micropython/ports/esp32/build-GENERIC_SPIRAM
+esptool.py --chip esp32 --port <YOUR_PORT> write_flash -z 0x1000 firmware.bin
+```
 
 ## Libraries
 
