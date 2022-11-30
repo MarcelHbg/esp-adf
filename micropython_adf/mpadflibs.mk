@@ -15,3 +15,7 @@ APP_LD_ARGS +=  -L$(ADFCOMP)/esp-adf-libs/esp_audio/lib/esp32 \
 				-L$(ADFCOMP)/esp-adf-libs/esp_upnp/lib/esp32 \
 				-L$(ADFCOMP)/esp-adf-libs/esp_sip/lib/esp32 \
 				$(addprefix -l,$(AUDIO_LIBS))
+
+BT_LIBS := btdm_app
+APP_LD_ARGS +=  -L$(ESPCOMP)/bt/lib \
+				$(addprefix -l,$(BT_LIBS))

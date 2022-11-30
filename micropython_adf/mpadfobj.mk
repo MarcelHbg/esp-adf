@@ -53,6 +53,9 @@ ESPADF_ESP_PERIPHERALS_O = $(patsubst %.c,%.o,\
 
 ESPADF_LIBS_O = $(patsubst %.c,%.o,$(wildcard $(ADFCOMP)/esp-adf-libs/esp_codec/*.c))
 
+# adf bt service src files
+ESPADF_BT_STREAM_O = $(patsubst %.c,%.o,$(wildcard $(ADFCOMP)/bluetooth_service/*.c))
+
 $(eval $(call gen_espidf_lib_rule,audio_board,$(ESPADF_AUDIO_BOARD_O)))
 $(eval $(call gen_espidf_lib_rule,audio_hal,$(ESPADF_AUDIO_HAL_O)))
 $(eval $(call gen_espidf_lib_rule,audio_pipeline,$(ESPADF_AUDIO_PIPELINE_O)))
@@ -62,6 +65,7 @@ $(eval $(call gen_espidf_lib_rule,display_service,$(ESPADF_DISPLAY_SERVICE_O)))
 $(eval $(call gen_espidf_lib_rule,esp_dispatcher,$(ESPADF_ESP_DISPATCHER_O)))
 $(eval $(call gen_espidf_lib_rule,esp_peripherals,$(ESPADF_ESP_PERIPHERALS_O)))
 $(eval $(call gen_espidf_lib_rule,esp-adf-libs,$(ESPADF_LIBS_O)))
+$(eval $(call gen_espidf_lib_rule,bluetooth_service,$(ESPADF_BT_STREAM_O)))
 
 ################################################################################
 # List of object files from the ESP32 IDF components which are needed by ADF components
@@ -85,6 +89,57 @@ ESPIDF_ESP_TLS_O = $(patsubst %.c,%.o,$(wildcard $(ESPCOMP)/esp-tls/*.c))
 
 ESPIDF_ESP_NGHTTP = $(patsubst %.c,%.o,$(wildcard $(ESPCOMP)/nghttp/port/*.c))
 
+# idf bt component src files
+ESPIDF_ESP_BT = $(patsubst %.c,%.o,\
+	$(wildcard $(ESPCOMP)/bt/*.c) \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/dm/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/gatt/*.c)                    \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/hh/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/sdp/*.c)                     \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/av/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/ar/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/sys/*.c)                     \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/jv/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/hf_client/*.c)               \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/bta/*.c)                         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btcore/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btif/*.c)                        \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/device/*.c)                      \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/gki/*.c)                         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/hci/*.c)                         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/main/*.c)                        \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/osi/*.c)                         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/external/sbc/decoder/srce/*.c)   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/external/sbc/encoder/srce/*.c)   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/core/*.c)                    \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/esp/blufi/*.c)       \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/gap/*.c)         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/gatt/*.c)        \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/a2dp/*.c)        \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/avrc/*.c)        \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/spp/*.c)         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/std/hf_client/*.c)   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/btc/profile/*.c)                 \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/btm/*.c)                   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/btu/*.c)                   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/gap/*.c)                   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/gatt/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/hcic/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/include/*.c)               \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/l2cap/*.c)                 \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/sdp/*.c)                   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/smp/*.c)                   \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/avct/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/avrc/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/avdt/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/a2dp/*.c)                  \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/rfcomm/*.c)                \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/stack/*.c)                       \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/utils/*.c)                       \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/api/*.c)                         \
+	$(wildcard $(ESPCOMP)/bt/bluedroid/*.c) 							\
+	)
+
 $(eval $(call gen_espidf_lib_rule,esp_http_client,$(ESPIDF_HTTP_CLIENT_O)))
 $(eval $(call gen_espidf_lib_rule,spiffs,$(ESPIDF_SPIFFS_O)))
 $(eval $(call gen_espidf_lib_rule,fatfs,$(ESPIDF_FATFS_O)))
@@ -93,3 +148,4 @@ $(eval $(call gen_espidf_lib_rule,wear_levelling,$(ESPIDF_WEAR_LEVELLING_O)))
 $(eval $(call gen_espidf_lib_rule,tcp_transport,$(ESPIDF_TCP_TRANSPORT_O)))
 $(eval $(call gen_espidf_lib_rule,esp_tls,$(ESPIDF_ESP_TLS_O)))
 $(eval $(call gen_espidf_lib_rule,nghttp,$(ESPIDF_ESP_NGHTTP)))
+$(eval $(call gen_espidf_lib_rule,bt,$(ESPIDF_ESP_BT)))

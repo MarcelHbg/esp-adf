@@ -37,9 +37,24 @@
 #include "mp3_decoder.h"
 #include "wav_decoder.h"
 
+#include "pcm_decoder.h" // decoder for bt stream
+
 #include "http_stream.h"
 #include "i2s_stream.h"
 #include "vfs_stream.h"
+
+#include "a2dp_stream.h" // bt audio stream
+
+#include "esp_log.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
+#include "esp_a2dp_api.h"
+#include "esp_avrc_api.h"
+#include "esp_peripherals.h"
+
+static const char *TAG = "uPy audio";
 
 typedef struct _audio_player_obj_t {
     mp_obj_base_t base;
@@ -101,6 +116,23 @@ STATIC int _http_stream_event_handle(http_stream_event_msg_t *msg)
 
 STATIC esp_audio_handle_t audio_player_create(void)
 {
+    // init bluetooth
+    ESP_LOGI(TAG, "Init Bluetooth");
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+    ESP_ERROR_CHECK(esp_bluedroid_init());
+    ESP_ERROR_CHECK(esp_bluedroid_enable());
+
+    esp_bt_dev_set_device_name("uPy_audio_player");
+
+//#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)) // not working 
+//    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+//#else
+    esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
+//#endif
+
     // init audio board
     audio_board_handle_t board_handle = audio_board_init();
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
@@ -129,6 +161,14 @@ STATIC esp_audio_handle_t audio_player_create(void)
     audio_element_handle_t http_stream_reader = http_stream_init(&http_cfg);
     esp_audio_input_stream_add(player, http_stream_reader);
 
+    // bt stream
+    a2dp_stream_config_t a2dp_config = {
+        .type = AUDIO_STREAM_READER,
+        .user_callback = {0},
+    };
+    audio_element_handle_t bt_stream_reader = a2dp_stream_init(&a2dp_config);
+    esp_audio_input_stream_add(player, bt_stream_reader);
+
     // add decoder
     // mp3
     mp3_decoder_cfg_t mp3_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
@@ -142,6 +182,10 @@ STATIC esp_audio_handle_t audio_player_create(void)
     wav_decoder_cfg_t wav_dec_cfg = DEFAULT_WAV_DECODER_CONFIG();
     wav_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, wav_decoder_init(&wav_dec_cfg));
+    // pcm for bt stream
+    pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_PCM_DECODER_CONFIG();
+    pcm_dec_cfg.task_core = 1;
+    esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, pcm_decoder_init(&pcm_dec_cfg));
 
     // Create writers and add to esp_audio
     i2s_stream_cfg_t i2s_writer = I2S_STREAM_CFG_DEFAULT();
@@ -373,3 +417,4 @@ const mp_obj_type_t audio_player_type = {
     .make_new = audio_player_make_new,
     .locals_dict = (mp_obj_dict_t *)&player_locals_dict,
 };
+
