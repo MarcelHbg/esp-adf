@@ -54,7 +54,7 @@
 #include "esp_avrc_api.h"
 #include "esp_peripherals.h"
 
-static const char *TAG = "uPy audio";
+static const char *TAG = "MPY_AUDIO";
 
 typedef struct _audio_player_obj_t {
     mp_obj_base_t base;
@@ -114,8 +114,101 @@ STATIC int _http_stream_event_handle(http_stream_event_msg_t *msg)
     return ESP_OK;
 }
 
+static const char *s_a2d_conn_state_str[] = {"Disconnected", "Connecting", "Connected", "Disconnecting"};
+static const char *s_a2d_audio_state_str[] = {"Suspended", "Stopped", "Started"};
+
+static esp_audio_handle_t _player = NULL;
+
+STATIC void _user_bt_event_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
+{
+    ESP_LOGD(TAG, "%s evt %d", __func__, event);
+    esp_a2d_cb_param_t *a2d = NULL;
+    switch (event) {
+    case ESP_A2D_CONNECTION_STATE_EVT: {
+        a2d = (esp_a2d_cb_param_t *)(param);
+        uint8_t *bda = a2d->conn_stat.remote_bda;
+        ESP_LOGI(TAG, "A2DP connection state: %s, [%02x:%02x:%02x:%02x:%02x:%02x]",
+             s_a2d_conn_state_str[a2d->conn_stat.state], bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
+        if (a2d->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+            esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
+        } else if (a2d->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED){
+            esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_NONE);
+        }
+        break;
+    }
+    case ESP_A2D_AUDIO_STATE_EVT: {
+        a2d = (esp_a2d_cb_param_t *)(param);
+        ESP_LOGI(TAG, "A2DP audio state: %s", s_a2d_audio_state_str[a2d->audio_stat.state]);
+        esp_a2d_audio_state_t s_audio_state = a2d->audio_stat.state;
+        if (ESP_A2D_AUDIO_STATE_STARTED == a2d->audio_stat.state) {}
+        break;
+    }/*
+    case ESP_A2D_AUDIO_CFG_EVT: {
+        a2d = (esp_a2d_cb_param_t *)(param);
+        ESP_LOGI(TAG, "A2DP audio stream configuration, codec type %d", a2d->audio_cfg.mcc.type);
+        break;
+    }
+    case ESP_A2D_PROF_STATE_EVT: {
+        a2d = (esp_a2d_cb_param_t *)(param);
+        if (ESP_A2D_INIT_SUCCESS == a2d->a2d_prof_stat.init_state) {
+            ESP_LOGI(TAG,"A2DP PROF STATE: Init Compl\n");
+        } else {
+            ESP_LOGI(TAG,"A2DP PROF STATE: Deinit Compl\n");
+        }
+        break;
+    }*/
+    default:
+        ESP_LOGE(TAG, "Invalid A2DP event: %d", event);
+        break;
+    }
+}
+
+STATIC esp_err_t _esp_periph_event_cb(audio_event_iface_msg_t *msg, void *ctx)
+{
+    ESP_LOGI(TAG, "event cb called");
+
+    esp_periph_handle_t *bt_periph = (esp_periph_handle_t *)ctx;
+
+    if (msg->source_type == PERIPH_ID_BLUETOOTH 
+        && msg->source == (void *)bt_periph) {
+        switch (msg->cmd)
+        {
+        case PERIPH_BLUETOOTH_CONNECTED:
+            ESP_LOGI(TAG, "Bluetooth connected");
+            break;
+        case PERIPH_BLUETOOTH_DISCONNECTED:
+            ESP_LOGI(TAG, "Bluetooth disconnected");
+            break;
+        case PERIPH_BLUETOOTH_AUDIO_STARTED:
+            ESP_LOGI(TAG, "Bluetooth Audio started");
+            break;
+        case PERIPH_BLUETOOTH_AUDIO_SUSPENDED:
+            ESP_LOGI(TAG, "Bluetooth Audio suspended");
+            break;
+        case PERIPH_BLUETOOTH_AUDIO_STOPPED:
+            ESP_LOGI(TAG, "Bluetooth Audio stopped");
+            break;
+        default:
+            ESP_LOGI(TAG, "Bluetooth unknown event");
+            break;
+        }
+    }
+
+    else if (msg->cmd == AEL_MSG_CMD_ERROR) {
+        ESP_LOGE(TAG, "[ * ] Action command error");
+    }
+
+    return ESP_OK;
+}
+
 STATIC esp_audio_handle_t audio_player_create(void)
 {
+    // logging
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
+    ESP_LOGI(TAG, "Create Audio player");
+
     // init bluetooth
     ESP_LOGI(TAG, "Init Bluetooth");
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
@@ -125,19 +218,23 @@ STATIC esp_audio_handle_t audio_player_create(void)
     ESP_ERROR_CHECK(esp_bluedroid_init());
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
-    esp_bt_dev_set_device_name("uPy_audio_player");
+    esp_bt_dev_set_device_name("ESP_AUDIO_SPEAKER");
 
-//#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)) // not working 
+//#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0))
 //    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 //#else
     esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
 //#endif
 
     // init audio board
+    
+    ESP_LOGI(TAG, "Initialize Audio Board");
     audio_board_handle_t board_handle = audio_board_init();
     audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    
 
     // init player
+    ESP_LOGI(TAG, "Initialize Audio Player");
     esp_audio_cfg_t cfg = DEFAULT_ESP_AUDIO_CONFIG();
     cfg.vol_handle = board_handle->audio_hal;
     cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
@@ -148,11 +245,13 @@ STATIC esp_audio_handle_t audio_player_create(void)
 
     // add input stream
     // fatfs stream
+    ESP_LOGI(TAG, "Initialize input File Stream");
     vfs_stream_cfg_t fs_reader = VFS_STREAM_CFG_DEFAULT();
     fs_reader.type = AUDIO_STREAM_READER;
     fs_reader.task_core = 1;
     esp_audio_input_stream_add(player, vfs_stream_init(&fs_reader));
     // http stream
+    ESP_LOGI(TAG, "Initialize input Http Stream");
     http_stream_cfg_t http_cfg = HTTP_STREAM_CFG_DEFAULT();
     http_cfg.event_handle = _http_stream_event_handle;
     http_cfg.type = AUDIO_STREAM_READER;
@@ -162,38 +261,56 @@ STATIC esp_audio_handle_t audio_player_create(void)
     esp_audio_input_stream_add(player, http_stream_reader);
 
     // bt stream
+    ESP_LOGI(TAG, "Initialize input Bluetooth Stream");
+    a2dp_stream_user_callback_t bt_cb = {0};
+    bt_cb.user_a2d_cb = _user_bt_event_cb;
     a2dp_stream_config_t a2dp_config = {
         .type = AUDIO_STREAM_READER,
-        .user_callback = {0},
+        .user_callback = bt_cb,
     };
     audio_element_handle_t bt_stream_reader = a2dp_stream_init(&a2dp_config);
     esp_audio_input_stream_add(player, bt_stream_reader);
 
     // add decoder
     // mp3
+    ESP_LOGI(TAG, "Initialize mp3 Decoder");
     mp3_decoder_cfg_t mp3_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
     mp3_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, mp3_decoder_init(&mp3_dec_cfg));
     // amr
+    ESP_LOGI(TAG, "Initialize amr Decoder");
     amr_decoder_cfg_t amr_dec_cfg = DEFAULT_AMR_DECODER_CONFIG();
     amr_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, amr_decoder_init(&amr_dec_cfg));
     // wav
+    ESP_LOGI(TAG, "Initialize wav Decoder");
     wav_decoder_cfg_t wav_dec_cfg = DEFAULT_WAV_DECODER_CONFIG();
     wav_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, wav_decoder_init(&wav_dec_cfg));
     // pcm for bt stream
+    ESP_LOGI(TAG, "Initialize pcm Decoder");
     pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_PCM_DECODER_CONFIG();
     pcm_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, pcm_decoder_init(&pcm_dec_cfg));
 
     // Create writers and add to esp_audio
+    ESP_LOGI(TAG, "Initialize output I2S Stream");
     i2s_stream_cfg_t i2s_writer = I2S_STREAM_CFG_DEFAULT();
     i2s_writer.type = AUDIO_STREAM_WRITER;
     i2s_writer.i2s_config.sample_rate = 48000;
     i2s_writer.task_core = 1;
     esp_audio_output_stream_add(player, i2s_stream_init(&i2s_writer));
 
+    // init bt peripheral
+    /*
+    ESP_LOGI(TAG, "Initialize Bluetooth peripheral");
+    esp_periph_config_t esp_periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
+    esp_periph_set_handle_t set = esp_periph_set_init(&esp_periph_cfg);
+    esp_periph_handle_t bt_periph = bt_create_periph();
+    ESP_ERROR_CHECK(esp_periph_set_register_callback(set, _esp_periph_event_cb, (void *)bt_periph));
+    ESP_ERROR_CHECK(esp_periph_start(set, bt_periph));
+    */
+    ESP_LOGI(TAG, "Create Audio player done");
     return player;
 }
 
@@ -213,7 +330,23 @@ STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, 
 
     return MP_OBJ_FROM_PTR(self);
 }
+/*
+STATIC mp_obj_t audio_player_ena_bluetooth_helper(audio_player_obj_t *self, mp_uint_t n_args, const mp_obj_t *args, mp_map_t *kw_args)
+{
+    enum {
+        ARG_bt_cb,
+    };
+    static const mp_arg_t allowed_args[] = {
+        { MP_QSTR_self, MP_ARG_REQUIRED}
+    };
+    
+}
 
+STATIC mp_obj_t audio_player_ena_bluetooth(mp_uint_t n_args, const mp_obj_t *args, mp_map_t *kw_args)
+{
+    return audio_player_ena_bluetooth_helper(args[0], n_args - 1, args + 1, kw_args);
+}
+*/
 STATIC mp_obj_t audio_player_play_helper(audio_player_obj_t *self, mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     enum {
@@ -236,6 +369,11 @@ STATIC mp_obj_t audio_player_play_helper(audio_player_obj_t *self, mp_uint_t n_a
         esp_audio_state_t state = { 0 };
         esp_audio_state_get(self->player, &state);
         if (state.status == AUDIO_STATUS_RUNNING || state.status == AUDIO_STATUS_PAUSED) {
+            /*
+            if (state.media_src == MEDIA_SRC_TYPE_MUSIC_A2DP) {
+                ESP_LOGI(TAG, "Periph Bluetooth stop");
+                periph_bluetooth_stop(self->bt_periph);
+            }*/
             esp_audio_stop(self->player, TERMINATION_TYPE_NOW);
             int wait = 20;
             esp_audio_state_get(self->player, &state);
@@ -273,7 +411,14 @@ STATIC mp_obj_t audio_player_stop_helper(audio_player_obj_t *self, mp_uint_t n_a
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
-
+    /*
+    esp_audio_state_t state = { 0 };
+    esp_audio_state_get(self->player, &state);
+    if (state.media_src == MEDIA_SRC_TYPE_MUSIC_A2DP) {
+        ESP_LOGI(TAG, "Periph Bluetooth stop");
+        periph_bluetooth_stop(self->bt_periph);
+    }
+    */
     return mp_obj_new_int(esp_audio_stop(self->player, args[ARG_termination].u_int));
 }
 
