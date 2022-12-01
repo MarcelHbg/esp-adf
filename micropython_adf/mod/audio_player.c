@@ -142,63 +142,11 @@ STATIC void _user_bt_event_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *para
         esp_a2d_audio_state_t s_audio_state = a2d->audio_stat.state;
         if (ESP_A2D_AUDIO_STATE_STARTED == a2d->audio_stat.state) {}
         break;
-    }/*
-    case ESP_A2D_AUDIO_CFG_EVT: {
-        a2d = (esp_a2d_cb_param_t *)(param);
-        ESP_LOGI(TAG, "A2DP audio stream configuration, codec type %d", a2d->audio_cfg.mcc.type);
-        break;
     }
-    case ESP_A2D_PROF_STATE_EVT: {
-        a2d = (esp_a2d_cb_param_t *)(param);
-        if (ESP_A2D_INIT_SUCCESS == a2d->a2d_prof_stat.init_state) {
-            ESP_LOGI(TAG,"A2DP PROF STATE: Init Compl\n");
-        } else {
-            ESP_LOGI(TAG,"A2DP PROF STATE: Deinit Compl\n");
-        }
-        break;
-    }*/
     default:
         ESP_LOGE(TAG, "Invalid A2DP event: %d", event);
         break;
     }
-}
-
-STATIC esp_err_t _esp_periph_event_cb(audio_event_iface_msg_t *msg, void *ctx)
-{
-    ESP_LOGI(TAG, "event cb called");
-
-    esp_periph_handle_t *bt_periph = (esp_periph_handle_t *)ctx;
-
-    if (msg->source_type == PERIPH_ID_BLUETOOTH 
-        && msg->source == (void *)bt_periph) {
-        switch (msg->cmd)
-        {
-        case PERIPH_BLUETOOTH_CONNECTED:
-            ESP_LOGI(TAG, "Bluetooth connected");
-            break;
-        case PERIPH_BLUETOOTH_DISCONNECTED:
-            ESP_LOGI(TAG, "Bluetooth disconnected");
-            break;
-        case PERIPH_BLUETOOTH_AUDIO_STARTED:
-            ESP_LOGI(TAG, "Bluetooth Audio started");
-            break;
-        case PERIPH_BLUETOOTH_AUDIO_SUSPENDED:
-            ESP_LOGI(TAG, "Bluetooth Audio suspended");
-            break;
-        case PERIPH_BLUETOOTH_AUDIO_STOPPED:
-            ESP_LOGI(TAG, "Bluetooth Audio stopped");
-            break;
-        default:
-            ESP_LOGI(TAG, "Bluetooth unknown event");
-            break;
-        }
-    }
-
-    else if (msg->cmd == AEL_MSG_CMD_ERROR) {
-        ESP_LOGE(TAG, "[ * ] Action command error");
-    }
-
-    return ESP_OK;
 }
 
 STATIC esp_audio_handle_t audio_player_create(void)
@@ -301,15 +249,6 @@ STATIC esp_audio_handle_t audio_player_create(void)
     i2s_writer.task_core = 1;
     esp_audio_output_stream_add(player, i2s_stream_init(&i2s_writer));
 
-    // init bt peripheral
-    /*
-    ESP_LOGI(TAG, "Initialize Bluetooth peripheral");
-    esp_periph_config_t esp_periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
-    esp_periph_set_handle_t set = esp_periph_set_init(&esp_periph_cfg);
-    esp_periph_handle_t bt_periph = bt_create_periph();
-    ESP_ERROR_CHECK(esp_periph_set_register_callback(set, _esp_periph_event_cb, (void *)bt_periph));
-    ESP_ERROR_CHECK(esp_periph_start(set, bt_periph));
-    */
     ESP_LOGI(TAG, "Create Audio player done");
     return player;
 }
@@ -330,23 +269,7 @@ STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, 
 
     return MP_OBJ_FROM_PTR(self);
 }
-/*
-STATIC mp_obj_t audio_player_ena_bluetooth_helper(audio_player_obj_t *self, mp_uint_t n_args, const mp_obj_t *args, mp_map_t *kw_args)
-{
-    enum {
-        ARG_bt_cb,
-    };
-    static const mp_arg_t allowed_args[] = {
-        { MP_QSTR_self, MP_ARG_REQUIRED}
-    };
-    
-}
 
-STATIC mp_obj_t audio_player_ena_bluetooth(mp_uint_t n_args, const mp_obj_t *args, mp_map_t *kw_args)
-{
-    return audio_player_ena_bluetooth_helper(args[0], n_args - 1, args + 1, kw_args);
-}
-*/
 STATIC mp_obj_t audio_player_play_helper(audio_player_obj_t *self, mp_uint_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     enum {
@@ -369,11 +292,6 @@ STATIC mp_obj_t audio_player_play_helper(audio_player_obj_t *self, mp_uint_t n_a
         esp_audio_state_t state = { 0 };
         esp_audio_state_get(self->player, &state);
         if (state.status == AUDIO_STATUS_RUNNING || state.status == AUDIO_STATUS_PAUSED) {
-            /*
-            if (state.media_src == MEDIA_SRC_TYPE_MUSIC_A2DP) {
-                ESP_LOGI(TAG, "Periph Bluetooth stop");
-                periph_bluetooth_stop(self->bt_periph);
-            }*/
             esp_audio_stop(self->player, TERMINATION_TYPE_NOW);
             int wait = 20;
             esp_audio_state_get(self->player, &state);
@@ -411,14 +329,6 @@ STATIC mp_obj_t audio_player_stop_helper(audio_player_obj_t *self, mp_uint_t n_a
     };
     mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
     mp_arg_parse_all(n_args, pos_args, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
-    /*
-    esp_audio_state_t state = { 0 };
-    esp_audio_state_get(self->player, &state);
-    if (state.media_src == MEDIA_SRC_TYPE_MUSIC_A2DP) {
-        ESP_LOGI(TAG, "Periph Bluetooth stop");
-        periph_bluetooth_stop(self->bt_periph);
-    }
-    */
     return mp_obj_new_int(esp_audio_stop(self->player, args[ARG_termination].u_int));
 }
 
