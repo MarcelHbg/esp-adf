@@ -5,6 +5,15 @@ set(COMPONENT_REQUIRES )
 set(COMPONENT_PRIV_REQUIRES esp_peripherals audio_sal audio_hal esp_dispatcher display_service)
 
 
+if (CONFIG_A1S_AUDIO_KIT_V2_2_BOARD)
+message(STATUS "Current board name is " CONFIG_A1S_AUDIO_KIT_V2_2_BOARD)
+list(APPEND COMPONENT_ADD_INCLUDEDIRS ./audio_kit_v2_2_es8388)
+set(COMPONENT_SRCS
+./audio_kit_v2_2_es8388/board.c
+./audio_kit_v2_2_es8388/board_pins_config.c
+)
+endif()
+
 if (CONFIG_ESP_LYRAT_V4_2_BOARD)
 message(STATUS "Current board name is " CONFIG_ESP_LYRAT_V4_2_BOARD)
 list(APPEND COMPONENT_ADD_INCLUDEDIRS ./lyrat_v4_2)

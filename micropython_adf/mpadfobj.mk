@@ -2,6 +2,9 @@
 ################################################################################
 # List of object files from the ESP32 ADF components
 
+ifdef CONFIG_A1S_AUDIO_KIT_V2_2_BOARD
+ESPADF_AUDIO_BOARD_O = $(patsubst %.c,%.o,$(wildcard $(ADFCOMP)/audio_board/audio_kit_v2_2_es8388/*.c))
+endif
 ifdef CONFIG_ESP_LYRAT_V4_3_BOARD
 ESPADF_AUDIO_BOARD_O = $(patsubst %.c,%.o,$(wildcard $(ADFCOMP)/audio_board/lyrat_v4_3/*.c))
 endif

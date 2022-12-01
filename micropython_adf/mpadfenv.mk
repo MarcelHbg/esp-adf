@@ -21,6 +21,9 @@ SDKCONFIG += $(ADFSDKCONFIG)
 # bluetooth_service clouds dueros_service esp_actions input_key_service playlist wifi_service
 INC_ESPCOMP += -I$(ADFCOMP)/audio_board/include
 # different board support
+ifdef CONFIG_A1S_AUDIO_KIT_V2_2_BOARD
+INC_ESPCOMP += -I$(ADFCOMP)/audio_board/audio_kit_v2_2_es8388
+endif
 ifdef CONFIG_ESP_LYRAT_V4_3_BOARD
 INC_ESPCOMP += -I$(ADFCOMP)/audio_board/lyrat_v4_3
 endif
