@@ -1,7 +1,7 @@
 CONFIG_COMPILER_OPTIMIZATIONS_SIZE=y
 
 # ESP32
-CONFIG_ESP32_REV_MIN_3
+#CONFIG_ESP32_REV_MIN_3=y
 
 # Override some defaults so BT stack is enabled and
 # Classic BT is enabled and BT_DRAM_RELEASE is disabled
