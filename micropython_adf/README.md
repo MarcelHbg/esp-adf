@@ -31,7 +31,7 @@ To build the project, please follow the steps below:
 cd ~
 mkdir uPy-adf
 cd uPy-adf
-git clone --recurse-submodules https://github.com/MarcelHbg/esp-adf.git
+git clone -b uPy_bt_sink --recurse-submodules https://github.com/MarcelHbg/esp-adf.git
 ```
 
 - setup Paths
