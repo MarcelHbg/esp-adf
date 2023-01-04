@@ -71,6 +71,7 @@ struct _bt_a2dp_obj_t {
     esp_bd_addr_t peer_bd_addr;
     esp_bd_addr_t last_connection;
     bool is_connected;
+    bool is_connectable;
     bool autoreconnect_on;
     bool autoreconnect_allowed;
     a2dp_task_t app_task;
@@ -82,6 +83,7 @@ struct _bt_a2dp_obj_t {
     .peer_bd_addr = {0,0,0,0,0,0},\
     .last_connection = {0,0,0,0,0,0},\
     .is_connected = false,\
+    .is_connectable = false,\
     .autoreconnect_on = true,\
     .autoreconnect_allowed = false,\
     .app_task = DEFAULT_A2DP_TASK_CONFIG(),\
@@ -133,7 +135,7 @@ const char *_bool_to_str(bool x){
 }
 
 void _log_free_heap(){
-    ESP_LOGD(AV_TAG, "Available Heap: %zu", esp_get_free_heap_size());
+    ESP_LOGI(AV_TAG, "Available Heap: %zu", esp_get_free_heap_size());
 }
 
 /*******************************************************************************************/
@@ -215,20 +217,17 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
     esp_log_level_set(APP_TAG, ESP_LOG_DEBUG);
     esp_log_level_set(AV_TAG, ESP_LOG_DEBUG);
 
-    ESP_LOGD(AV_TAG, "%s called", __func__);
-
-    bt_a2dp_obj_t *obj = NULL;
-    /*bt_a2dp_obj_t *obj = m_malloc(sizeof(bt_a2dp_obj_t));
+    bt_a2dp_obj_t *obj = malloc(sizeof(bt_a2dp_obj_t));
     if(!obj) {
-        ESP_LOGE(AV_TAG,"%s m_malloc failed", __func__);
+        ESP_LOGE(AV_TAG,"%s: malloc failed", __func__);
         return NULL;
     }
 
-    ESP_LOGD(AV_TAG, "init default obj");
+    ESP_LOGI(AV_TAG, "%s: init default obj", __func__);
     bt_a2dp_obj_t a2dp_obj = DEFAULT_A2DP_OBJ_CONFIG();
     memcpy(obj, &a2dp_obj, sizeof(bt_a2dp_obj_t));
 
-    ESP_LOGD(AV_TAG, "device name is set: %s", device_name);
+    ESP_LOGI(AV_TAG, "%s: device name is set: %s", __func__, device_name);
     strcpy(obj->device_name, device_name);
 
     // save address global
@@ -243,14 +242,13 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
     }
 
     // create application task 
-    ESP_LOGI(AV_TAG, "start_app_task");
+    ESP_LOGI(AV_TAG, "%s: start_app_task", __func__);
     app_task_start_up(&obj->app_task);
 
     // Bluetooth device name, connection mode and profile set up
-    ESP_LOGD(AV_TAG, "dispatch app stackup event");
+    ESP_LOGI(AV_TAG, "%s: dispatch app stackup event", __func__);
     app_work_dispatch(&obj->app_task, av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0);
 
-    */
     return obj;
 }
 
@@ -303,22 +301,24 @@ void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
 
     app_task_shut_down(&obj->app_task);
 
-    m_free(obj);
+    free(obj);
     obj = NULL;
     obj_g = NULL;
 }
 
 // static method
-void a2dp_set_bt_connectable(bool connectable) {
+void a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
     ESP_LOGI(AV_TAG, "set_scan_mode_connectable %s", _bool_to_str(connectable));             
     if (connectable){
         if (esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE) != ESP_OK){
             ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode");            
-        } 
+        }
+        obj->is_connectable = true;
     } else {
         if (esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_NONE) != ESP_OK){
             ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode");            
         }    
+        obj->is_connectable = false;
     }
 }
 
@@ -336,7 +336,7 @@ bool a2dp_connect_to(bt_a2dp_obj_t *obj, int *peer){
     esp_bd_addr_t _peer_addr = {peer[0], peer[1], peer[2], peer[3], peer[4], peer[5]};
 
     ESP_LOGW(AV_TAG, "connect_to to %s", _bd_addr_to_str(_peer_addr));
-    a2dp_set_bt_connectable(true);
+    a2dp_set_bt_connectable(obj, true);
     delay(100);
     esp_err_t err = esp_a2d_sink_connect(_peer_addr);
 
@@ -396,7 +396,7 @@ void a2dp_set_autoreconnect(bt_a2dp_obj_t *obj, bool state){
 
 bool app_send_msg(a2dp_task_t *app_task, app_msg_t *msg)
 {
-    ESP_LOGD(AV_TAG, "%s", __func__);
+    ESP_LOGI(AV_TAG, "%s", __func__);
     if (msg == NULL || app_task->app_task_queue == NULL) {
         ESP_LOGE(APP_TAG, "%s app_send_msg failed", __func__);
         return false;
@@ -411,7 +411,7 @@ bool app_send_msg(a2dp_task_t *app_task, app_msg_t *msg)
 
 bool app_work_dispatch(a2dp_task_t *app_task, app_callback_t p_cback, uint16_t event, void *p_params, int param_len)
 {
-    ESP_LOGD(APP_TAG, "%s event 0x%x, param len %d", __func__, event, param_len);
+    ESP_LOGI(APP_TAG, "%s event 0x%x, param len %d", __func__, event, param_len);
     
     app_msg_t msg;
     memset(&msg, 0, sizeof(app_msg_t));
@@ -434,14 +434,14 @@ bool app_work_dispatch(a2dp_task_t *app_task, app_callback_t p_cback, uint16_t e
 
 void app_work_dispatched(app_msg_t *msg)
 {
-    ESP_LOGD(AV_TAG, "%s", __func__);
+    ESP_LOGI(AV_TAG, "%s", __func__);
     if (msg->cb) {
         msg->cb(msg->event, msg->param);
     }
 }
 
 void app_task_handler(void *arg){
-    ESP_LOGD(AV_TAG, "%s", __func__);
+    ESP_LOGI(AV_TAG, "%s", __func__);
     
     a2dp_task_t *app_task = (a2dp_task_t *)arg;
 
@@ -451,7 +451,7 @@ void app_task_handler(void *arg){
             ESP_LOGE(APP_TAG, "%s, app_task_queue is null", __func__);
             delay(100);
         } else if (pdTRUE == xQueueReceive(app_task->app_task_queue, &msg, (portTickType)portMAX_DELAY)) {
-            ESP_LOGD(APP_TAG, "%s, sig 0x%x, 0x%x", __func__, msg.sig, msg.event);
+            ESP_LOGI(APP_TAG, "%s, sig 0x%x, 0x%x", __func__, msg.sig, msg.event);
             switch (msg.sig) {
             case APP_SIG_WORK_DISPATCH:
                 ESP_LOGI(APP_TAG, "%s, APP_SIG_WORK_DISPATCH sig: %d", __func__, msg.sig);
@@ -473,7 +473,7 @@ void app_task_handler(void *arg){
 }
 
 void app_task_start_up(a2dp_task_t *app_task){
-    ESP_LOGD(AV_TAG, "%s", __func__);
+    ESP_LOGI(AV_TAG, "%s", __func__);
     if (app_task->app_task_queue==NULL) 
         app_task->app_task_queue = xQueueCreate(app_task->event_queue_size, sizeof(app_msg_t));
 
@@ -485,7 +485,7 @@ void app_task_start_up(a2dp_task_t *app_task){
 }
 
 void app_task_shut_down(a2dp_task_t *app_task){
-    ESP_LOGD(AV_TAG, "%s", __func__);
+    ESP_LOGI(AV_TAG, "%s", __func__);
     if (app_task->app_task_handle!=NULL) {
         vTaskDelete(app_task->app_task_handle);
         app_task->app_task_handle = NULL;
@@ -498,12 +498,12 @@ void app_task_shut_down(a2dp_task_t *app_task){
 
 void av_hdl_stack_evt(uint16_t event, void *p_param)
 {
-    ESP_LOGD(AV_TAG, "%s evt %d", __func__, event);
+    ESP_LOGI(AV_TAG, "%s evt %d", __func__, event);
     //esp_err_t result;
 
     switch (event) {
         case BT_APP_EVT_STACK_UP: {
-            ESP_LOGD(AV_TAG, "%s av_hdl_stack_evt %s", __func__, "BT_APP_EVT_STACK_UP");
+            ESP_LOGI(AV_TAG, "%s av_hdl_stack_evt %s", __func__, "BT_APP_EVT_STACK_UP");
 
             /* set up device name */
             ESP_LOGI(AV_TAG,"esp_bt_dev_set_device_name: %s", obj_g->device_name);
@@ -514,7 +514,7 @@ void av_hdl_stack_evt(uint16_t event, void *p_param)
             if (result == ESP_OK){
                 result = esp_avrc_ct_register_callback(ccall_app_rc_ct_callback);
                 if (result == ESP_OK){
-                    ESP_LOGD(AV_TAG, "AVRCP controller initialized!");
+                    ESP_LOGI(AV_TAG, "AVRCP controller initialized!");
                 } else {
                     ESP_LOGE(AV_TAG,"esp_avrc_ct_register_callback: %d",result);
                 }
@@ -549,14 +549,14 @@ void av_hdl_stack_evt(uint16_t event, void *p_param)
 
             // start automatic reconnect if relevant and stack is up
             /*if (reconnect_status==AutoReconnect && has_last_connection() ) {
-                ESP_LOGD(AV_TAG, "reconnect");
+                ESP_LOGI(AV_TAG, "reconnect");
                 memcpy(peer_bd_addr, last_connection, ESP_BD_ADDR_LEN);
                 reconnect();
             }*/
 
             /* set discoverable and connectable mode, wait to be connected */
-            ESP_LOGD(AV_TAG, "set_scan_mode_connectable(true)");
-            a2dp_set_bt_connectable(true);
+            ESP_LOGI(AV_TAG, "set_scan_mode_connectable(true)");
+            a2dp_set_bt_connectable(obj_g, true);
             break;
         }
 

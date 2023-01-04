@@ -18,24 +18,23 @@ typedef struct _mp_a2dp_sink_obj_t {
 } mp_a2dp_sink_obj_t;
 
 STATIC mp_obj_t mp_a2dp_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args){
+    // set log level for mp a2dp_class wrapper
     esp_log_level_set(A2DP_CLASS_TAG, ESP_LOG_VERBOSE);
 
     mp_arg_check_num(n_args, n_kw, 1, 1, false);
 
     const char *device_name = mp_obj_str_get_str(args[0]);
-    ESP_LOGI(A2DP_CLASS_TAG, "name: %s",device_name);
 
-    static bt_a2dp_obj_t *basic_sink = NULL;
+    static bt_a2dp_obj_t *basic_sink = NULL; //prevent multiple sink inits
 
     mp_a2dp_sink_obj_t *self = m_new_obj_with_finaliser(mp_a2dp_sink_obj_t);
     self->base.type = type;
     if (basic_sink == NULL){
-        ESP_LOGI(A2DP_CLASS_TAG, "call a2dp_handler init");
+        ESP_LOGI(A2DP_CLASS_TAG, "init A2DP sink - %s", device_name);
         basic_sink = a2dp_init_bt(device_name);
     }
     self->a2dp_sink = basic_sink;
 
-    ESP_LOGD(A2DP_CLASS_TAG, "log debug test");
     return MP_OBJ_FROM_PTR(self);
 }
 
@@ -49,7 +48,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(mp_a2dp_delete_obj, mp_a2dp_delete);
 STATIC mp_obj_t mp_a2dp_set_connectable(mp_obj_t self_obj, mp_obj_t connectable){
     mp_a2dp_sink_obj_t *self = self_obj;
     bool _connectable = connectable == mp_const_true ? true : false;
-    a2dp_set_bt_connectable(_connectable);
+    a2dp_set_bt_connectable(self->a2dp_sink, _connectable);
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(mp_a2dp_set_connectable_obj, mp_a2dp_set_connectable);
