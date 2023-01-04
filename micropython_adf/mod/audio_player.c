@@ -154,7 +154,6 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name)
     esp_err_t ret = ESP_OK;
 
     // logging
-    esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
     ESP_LOGI(TAG, "Create Audio player");
@@ -180,16 +179,16 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name)
     else ESP_LOGI(TAG, "BT ESP_MPY_SPEAKER connectable");
 
     // init audio board
-    ESP_LOGI(TAG, "Initialize Audio Board");
-    audio_board_handle_t board_handle = audio_board_init();
-    audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    //ESP_LOGI(TAG, "Initialize Audio Board");
+    //audio_board_handle_t board_handle = audio_board_init();
+    //audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
 
     // init player
     ESP_LOGI(TAG, "Initialize Audio Player");
     esp_audio_cfg_t cfg = DEFAULT_ESP_AUDIO_CONFIG();
-    cfg.vol_handle = board_handle->audio_hal;
-    cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
-    cfg.vol_get = (audio_volume_get)audio_hal_get_volume;
+    //cfg.vol_handle = board_handle->audio_hal;
+    //cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
+    //cfg.vol_get = (audio_volume_get)audio_hal_get_volume;
     cfg.resample_rate = 48000;
     cfg.prefer_type = ESP_AUDIO_PREFER_MEM;
     esp_audio_handle_t player = esp_audio_create(&cfg);
