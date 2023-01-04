@@ -4,8 +4,6 @@
 #include "py/objstr.h"
 #include "py/runtime.h"
 
-#include "a2dp_stream.h" // bt audio stream
-
 #include "esp_log.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
@@ -15,20 +13,29 @@
 #include "esp_avrc_api.h"
 #include "esp_peripherals.h"
 
+#include "freertos/timers.h"
+#include "freertos/xtensa_api.h"
 #include "freertos/FreeRTOSConfig.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 
-#define APP_SIG_WORK_DISPATCH (0x01)
+#include "bt_a2dp_sink_handler.h"
 
 static const char *AV_TAG = "MPY_A2DP";
 static const char *APP_TAG = "MPY_A2DP_TASK";
+
+#define APP_SIG_WORK_DISPATCH (0x01)
 
 /**
  * @brief     handler for the dispatched work
  */
 typedef void (* app_callback_t) (uint16_t event, void *param);
+
+/* @brief event for handler "av_hdl_stack_up */
+enum {
+    BT_APP_EVT_STACK_UP = 0,
+};
 
 /** @brief Internal message to be sent for BluetoothA2DPSink and BluetoothA2DPSource */
 typedef struct {
@@ -38,46 +45,82 @@ typedef struct {
     void                 *param;   /*!< parameter area needs to be last */
 } app_msg_t;
 
-typedef struct {
-    UBaseType_t task_priority = configMAX_PRIORITIES - 10;
-    BaseType_t task_core = 1;
-    xQueueHandle app_task_queue = NULL;
-    xTaskHandle app_task_handle = NULL;
-    int event_queue_size = 20;
-    int event_stack_size = 3072;
-} app_task_t
+struct _a2dp_task_t {
+    UBaseType_t task_priority;
+    BaseType_t task_core;
+    xQueueHandle app_task_queue;
+    xTaskHandle app_task_handle;
+    int event_queue_size;
+    int event_stack_size;
+};
+typedef struct _a2dp_task_t a2dp_task_t;
+#define DEFAULT_A2DP_TASK_CONFIG() {\
+    .task_priority = configMAX_PRIORITIES - 10,\
+    .task_core = 1,\
+    .app_task_queue = NULL,\
+    .app_task_handle = NULL,\
+    .event_queue_size = 20,\
+    .event_stack_size = 3072,\
+}
 
-typedef struct _bt_a2dp_obj_t {
-    mp_obj_base_t base;
-    mp_obj_t callback;
-
+struct _bt_a2dp_obj_t {
+    char *device_name;
     esp_periph_handle_t bt_periph;
     esp_periph_set_handle_t periph_set;
-    audio_event_iface_msg_t bt_event;
-    mp_obj_t bt_callback;
-
+    //audio_event_iface_msg_t bt_event;
     esp_bd_addr_t peer_bd_addr;
-    esp_bd_addr_t last_connection = {0,0,0,0,0,0};
-    bool autoreconnect_on = true;
-    bool autoreconnect_allowed = true;
-
-    app_task_t app_task;
-} bt_a2dp_obj_t;
+    esp_bd_addr_t last_connection;
+    bool is_connected;
+    bool autoreconnect_on;
+    bool autoreconnect_allowed;
+    a2dp_task_t app_task;
+};
+#define DEFAULT_A2DP_OBJ_CONFIG() {\
+    .device_name = "ESP_MP_A2DP_SINK",\
+    .bt_periph = NULL,\
+    .periph_set = NULL,\
+    .peer_bd_addr = {0,0,0,0,0,0},\
+    .last_connection = {0,0,0,0,0,0},\
+    .is_connected = false,\
+    .autoreconnect_on = true,\
+    .autoreconnect_allowed = false,\
+    .app_task = DEFAULT_A2DP_TASK_CONFIG(),\
+}
 
 /*******************************************************************************************/
-/* global self obj pointer */
+/* global obj obj pointer */
 
-static bt_a2dp_obj_t *self_g = NULL;
+static bt_a2dp_obj_t *obj_g = NULL;
 
 /*******************************************************************************************/
-/* callback functions */
+/* private function declarations*/
 
-void ccall_app_a2d_callback(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param);
-void ccall_app_rc_ct_callback(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param);
-void ccall_app_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
+// task functions
+void app_task_start_up(a2dp_task_t *app_task);
+void app_task_shut_down(a2dp_task_t *app_task);
+bool app_work_dispatch(a2dp_task_t *app_task, app_callback_t p_cback, uint16_t event, void *p_params, int param_len);
+
+// event handler
+void av_hdl_stack_evt(uint16_t event, void *p_param);
+
+// bt callbacks
+void bt_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
 
 /*******************************************************************************************/
 /* global private functions */
+
+/**
+ * @brief call vTaskDelay to deley for the indicated number of milliseconds
+ * 
+ */
+void delay(long millis) {
+    const TickType_t xDelay = millis / portTICK_PERIOD_MS; 
+    vTaskDelay(xDelay);
+}
+
+unsigned long millis() {
+    return (unsigned long) (esp_timer_get_time() / 1000ULL);
+}
 
 const char *_bd_addr_to_str(esp_bd_addr_t bda){
     static char bda_str[18];
@@ -150,7 +193,7 @@ bool _init_bluedroid(){
         bt_stack_status = esp_bluedroid_get_status();
     }
 
-    if (esp_bt_gap_register_callback(ccall_app_gap_callback) != ESP_OK) {
+    if (esp_bt_gap_register_callback(bt_gap_callback) != ESP_OK) {
         ESP_LOGE(AV_TAG,"gap register failed");
         return false;
     }
@@ -166,16 +209,30 @@ bool _init_bluedroid(){
 /*******************************************************************************************/
 /* bt_a2dp class */
 
-bt_a2dp_obj_t *init(const char *device_name){
-    bt_a2dp_obj_t self = m_malloc(sizeof(_bt_a2dp_obj_t));
-    if(!self) {
-        ESP_LOGE(AV_TAG,"m_malloc failed");
+bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
+    
+    esp_log_level_set("*", ESP_LOG_DEBUG);
+    esp_log_level_set(APP_TAG, ESP_LOG_DEBUG);
+    esp_log_level_set(AV_TAG, ESP_LOG_DEBUG);
+
+    ESP_LOGD(AV_TAG, "%s called", __func__);
+
+    bt_a2dp_obj_t *obj = NULL;
+    /*bt_a2dp_obj_t *obj = m_malloc(sizeof(bt_a2dp_obj_t));
+    if(!obj) {
+        ESP_LOGE(AV_TAG,"%s m_malloc failed", __func__);
         return NULL;
     }
-    // save address global
-    self_g = &self;
 
-    const char *_name = device_name != NULL ? device_name : "ESP_MPY_AUDIO";
+    ESP_LOGD(AV_TAG, "init default obj");
+    bt_a2dp_obj_t a2dp_obj = DEFAULT_A2DP_OBJ_CONFIG();
+    memcpy(obj, &a2dp_obj, sizeof(bt_a2dp_obj_t));
+
+    ESP_LOGD(AV_TAG, "device name is set: %s", device_name);
+    strcpy(obj->device_name, device_name);
+
+    // save address global
+    obj_g = obj;
 
     if(!_init_bt_controller()){
         return NULL;
@@ -186,17 +243,25 @@ bt_a2dp_obj_t *init(const char *device_name){
     }
 
     // create application task 
-    app_task_start_up(&self.app_task);
+    ESP_LOGI(AV_TAG, "start_app_task");
+    app_task_start_up(&obj->app_task);
 
-    ESP_LOGI(AV_TAG,"esp_bt_dev_set_device_name: %s", _name);
-    if(esp_bt_dev_set_device_name(_name) != ESP_OK){
-        ESP_LOGE(AV_TAG,"esp_bt_dev_set_device_name failed");
-    }
+    // Bluetooth device name, connection mode and profile set up
+    ESP_LOGD(AV_TAG, "dispatch app stackup event");
+    app_work_dispatch(&obj->app_task, av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0);
+
+    */
+    return obj;
 }
 
-void deinit(bt_a2dp_obj_t *self){
-    disconnect(self);
-    while(is_connected()){
+void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return;
+    }
+
+    a2dp_disconnect(obj);
+    while(a2dp_is_connected(obj)){
         delay(100);
     }
 
@@ -236,13 +301,15 @@ void deinit(bt_a2dp_obj_t *self){
         _log_free_heap();
     }
 
-    m_free(self);
-    self = NULL;
-    self_g = NULL;
+    app_task_shut_down(&obj->app_task);
+
+    m_free(obj);
+    obj = NULL;
+    obj_g = NULL;
 }
 
 // static method
-void set_scan_mode_connectable(bool connectable) {
+void a2dp_set_bt_connectable(bool connectable) {
     ESP_LOGI(AV_TAG, "set_scan_mode_connectable %s", _bool_to_str(connectable));             
     if (connectable){
         if (esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE) != ESP_OK){
@@ -255,49 +322,94 @@ void set_scan_mode_connectable(bool connectable) {
     }
 }
 
-bool connect_to(bt_a2dp_obj_t *self, esp_bd_addr_t peer){
-    ESP_LOGW(AV_TAG, "connect_to to %s", _bd_addr_to_str(peer));
-    set_scan_mode_connectable(true);
+bool a2dp_connect_to(bt_a2dp_obj_t *obj, int *peer){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return false;
+    }
+
+    if (!obj->autoreconnect_allowed){
+        ESP_LOGE(AV_TAG, "reconnect not allowed");
+        return false;
+    } 
+
+    esp_bd_addr_t _peer_addr = {peer[0], peer[1], peer[2], peer[3], peer[4], peer[5]};
+
+    ESP_LOGW(AV_TAG, "connect_to to %s", _bd_addr_to_str(_peer_addr));
+    a2dp_set_bt_connectable(true);
     delay(100);
-    esp_err_t err = esp_a2d_connect(peer);
+    esp_err_t err = esp_a2d_sink_connect(_peer_addr);
 
     if (err!=ESP_OK){
         ESP_LOGE(AV_TAG, "esp_a2d_source_connect:%d", err);
     }
 
-    self.last_connection = peer;
+    obj->is_connected = true;
+    memcpy(obj->last_connection, _peer_addr, sizeof(esp_bd_addr_t));
     return err==ESP_OK;
 }
 
-void disconnect(bt_a2dp_obj_t *self){
-    ESP_LOGI(AV_TAG, "disconnect a2dp: %s", _bd_addr_to_str(self->last_connection));
+void a2dp_disconnect(bt_a2dp_obj_t *obj){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return;
+    }
+
+    ESP_LOGI(AV_TAG, "disconnect a2dp: %s", _bd_addr_to_str(obj->last_connection));
 
     // Prevent automatic reconnect
-    self->autoreconnect_allowed = false;
+    obj->autoreconnect_allowed = false;
 
-    esp_err_t status = esp_a2d_sink_disconnect(self->last_connection);
+    esp_err_t status = esp_a2d_sink_disconnect(obj->last_connection);
     if (status == ESP_FAIL) {
         ESP_LOGE(AV_TAG, "Failed disconnecting to device!");
     }
 }
 
-esp_bd_addr_t get_connected_addr(bt_a2dp_obj_t *self){
-    return self->peer_bd_addr;
+int *a2dp_get_connected_addr(bt_a2dp_obj_t *obj){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return NULL;
+    }
+    return (int *)obj->peer_bd_addr;
 }
 
-bool is_connected(bt_a2dp_obj_t *self){
-    return true;
+bool a2dp_is_connected(bt_a2dp_obj_t *obj){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return false;
+    }
+    return obj->is_connected;
 }
 
-void set_autoreconnect(bt_a2dp_obj_t *self, bool state){
-    self.autoreconnect_on = state;
+void a2dp_set_autoreconnect(bt_a2dp_obj_t *obj, bool state){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        return;
+    }
+    obj->autoreconnect_on = state;
     ESP_LOGI(AV_TAG, "set_autoreconnect: %s", _bool_to_str(state));
 }
 
 /*******************************************************************************************/
 /* app task methods */
 
-bool app_work_dispatch(app_task_t *app_task, app_callback_t p_cback, uint16_t event, void *p_params, int param_len)
+bool app_send_msg(a2dp_task_t *app_task, app_msg_t *msg)
+{
+    ESP_LOGD(AV_TAG, "%s", __func__);
+    if (msg == NULL || app_task->app_task_queue == NULL) {
+        ESP_LOGE(APP_TAG, "%s app_send_msg failed", __func__);
+        return false;
+    }
+
+    if (xQueueSend(app_task->app_task_queue, msg, 10 / portTICK_RATE_MS) != pdTRUE) {
+        ESP_LOGE(APP_TAG, "%s xQueue send failed", __func__);
+        return false;
+    }
+    return true;
+}
+
+bool app_work_dispatch(a2dp_task_t *app_task, app_callback_t p_cback, uint16_t event, void *p_params, int param_len)
 {
     ESP_LOGD(APP_TAG, "%s event 0x%x, param len %d", __func__, event, param_len);
     
@@ -328,26 +440,10 @@ void app_work_dispatched(app_msg_t *msg)
     }
 }
 
-
-bool app_send_msg(app_task_t *app_task, app_msg_t *msg)
-{
-    ESP_LOGD(AV_TAG, "%s", __func__);
-    if (msg == NULL || app_task->app_task_queue == NULL) {
-        ESP_LOGE(APP_TAG, "%s app_send_msg failed", __func__);
-        return false;
-    }
-
-    if (xQueueSend(app_task->app_task_queue, msg, 10 / portTICK_RATE_MS) != pdTRUE) {
-        ESP_LOGE(APP_TAG, "%s xQueue send failed", __func__);
-        return false;
-    }
-    return true;
-}
-
 void app_task_handler(void *arg){
     ESP_LOGD(AV_TAG, "%s", __func__);
     
-    app_task_t *app_task = (app_task_t *)arg;
+    a2dp_task_t *app_task = (a2dp_task_t *)arg;
 
     app_msg_t msg;
     while (true) {
@@ -376,7 +472,7 @@ void app_task_handler(void *arg){
     }
 }
 
-void app_task_start_up(app_task_t *app_task){
+void app_task_start_up(a2dp_task_t *app_task){
     ESP_LOGD(AV_TAG, "%s", __func__);
     if (app_task->app_task_queue==NULL) 
         app_task->app_task_queue = xQueueCreate(app_task->event_queue_size, sizeof(app_msg_t));
@@ -388,7 +484,7 @@ void app_task_start_up(app_task_t *app_task){
     }
 }
 
-void app_task_shut_down(app_task_t *app_task){
+void app_task_shut_down(a2dp_task_t *app_task){
     ESP_LOGD(AV_TAG, "%s", __func__);
     if (app_task->app_task_handle!=NULL) {
         vTaskDelete(app_task->app_task_handle);
@@ -400,7 +496,78 @@ void app_task_shut_down(app_task_t *app_task){
     }
 }
 
-void app_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
+void av_hdl_stack_evt(uint16_t event, void *p_param)
+{
+    ESP_LOGD(AV_TAG, "%s evt %d", __func__, event);
+    //esp_err_t result;
+
+    switch (event) {
+        case BT_APP_EVT_STACK_UP: {
+            ESP_LOGD(AV_TAG, "%s av_hdl_stack_evt %s", __func__, "BT_APP_EVT_STACK_UP");
+
+            /* set up device name */
+            ESP_LOGI(AV_TAG,"esp_bt_dev_set_device_name: %s", obj_g->device_name);
+            esp_bt_dev_set_device_name(obj_g->device_name);  
+
+            // initialize AVRCP controller 
+            /*result = esp_avrc_ct_init();
+            if (result == ESP_OK){
+                result = esp_avrc_ct_register_callback(ccall_app_rc_ct_callback);
+                if (result == ESP_OK){
+                    ESP_LOGD(AV_TAG, "AVRCP controller initialized!");
+                } else {
+                    ESP_LOGE(AV_TAG,"esp_avrc_ct_register_callback: %d",result);
+                }
+            } else {
+                ESP_LOGE(AV_TAG,"esp_avrc_ct_init: %d",result);
+            }
+            */
+#ifdef ESP_IDF_4
+            
+            /* initialize AVRCP target */
+            if (esp_avrc_tg_init() == ESP_OK){
+                esp_avrc_tg_register_callback(ccall_app_rc_tg_callback);
+                esp_avrc_rn_evt_cap_mask_t evt_set = {0};
+                esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
+                if(esp_avrc_tg_set_rn_evt_cap(&evt_set) != ESP_OK){
+                    ESP_LOGE(AV_TAG,"esp_avrc_tg_set_rn_evt_cap failed");
+                }
+            } else {
+                ESP_LOGE(AV_TAG,"esp_avrc_tg_init failed");
+            }
+
+#endif
+            
+            /* initialize A2DP sink */
+            /*if (esp_a2d_register_callback(ccall_app_a2d_callback)!=ESP_OK){
+                ESP_LOGE(AV_TAG,"esp_a2d_register_callback");
+            }*/
+            if (esp_a2d_sink_init()!=ESP_OK){
+                ESP_LOGE(AV_TAG,"esp_a2d_sink_init");            
+            }
+            obj_g->autoreconnect_allowed = true;
+
+            // start automatic reconnect if relevant and stack is up
+            /*if (reconnect_status==AutoReconnect && has_last_connection() ) {
+                ESP_LOGD(AV_TAG, "reconnect");
+                memcpy(peer_bd_addr, last_connection, ESP_BD_ADDR_LEN);
+                reconnect();
+            }*/
+
+            /* set discoverable and connectable mode, wait to be connected */
+            ESP_LOGD(AV_TAG, "set_scan_mode_connectable(true)");
+            a2dp_set_bt_connectable(true);
+            break;
+        }
+
+        default:
+            ESP_LOGE(AV_TAG, "%s unhandled evt %d", __func__, event);
+            break;
+
+    }
+}
+
+void bt_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
     switch (event) {
         case ESP_BT_GAP_AUTH_CMPL_EVT: {
             if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
@@ -418,14 +585,14 @@ void app_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
         }
 
         case ESP_BT_GAP_PIN_REQ_EVT: {
-                memcpy(self_g->peer_bd_addr, param->pin_req.bda, ESP_BD_ADDR_LEN);
-                ESP_LOGI(AV_TAG, "partner address: %s", to_str(self_g->peer_bd_addr));
+                memcpy(obj_g->peer_bd_addr, param->pin_req.bda, ESP_BD_ADDR_LEN);
+                ESP_LOGI(AV_TAG, "partner address: %s", _bd_addr_to_str(obj_g->peer_bd_addr));
             }
             break;
 
         case ESP_BT_GAP_CFM_REQ_EVT: {
-                memcpy(self_g->peer_bd_addr, param->cfm_req.bda, ESP_BD_ADDR_LEN);
-                ESP_LOGI(AV_TAG, "partner address: %s", to_str(self_g->peer_bd_addr));
+                memcpy(obj_g->peer_bd_addr, param->cfm_req.bda, ESP_BD_ADDR_LEN);
+                ESP_LOGI(AV_TAG, "partner address: %s", _bd_addr_to_str(obj_g->peer_bd_addr));
 
                 ESP_LOGI(AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please confirm the passkey: %d", param->cfm_req.num_val);
                 //pin_code_int = param->key_notif.passkey;
