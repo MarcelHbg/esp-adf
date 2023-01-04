@@ -60,6 +60,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_0(audio_mod_verno_obj, audio_mod_verno);
 
 extern const mp_obj_type_t audio_player_type;
 extern const mp_obj_type_t audio_recorder_type;
+extern const mp_obj_type_t a2dp_sink_type;
 
 STATIC const mp_rom_map_elem_t audio_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audio) },
@@ -68,6 +69,7 @@ STATIC const mp_rom_map_elem_t audio_module_globals_table[] = {
 
     { MP_ROM_QSTR(MP_QSTR_player), MP_ROM_PTR(&audio_player_type) },
     { MP_ROM_QSTR(MP_QSTR_recorder), MP_ROM_PTR(&audio_recorder_type) },
+    { MP_ROM_QSTR(MP_QSTR_A2DPSink), MP_ROM_PTR(&a2dp_sink_type) },
 
     // audio_err_t
     { MP_ROM_QSTR(MP_QSTR_AUDIO_OK), MP_ROM_INT(ESP_ERR_AUDIO_NO_ERROR) },
