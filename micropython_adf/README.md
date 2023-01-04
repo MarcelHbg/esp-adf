@@ -31,41 +31,14 @@ To build the project, please follow the steps below:
 cd ~
 mkdir uPy-adf
 cd uPy-adf
-git clone https://github.com/espressif/esp-adf.git
-git clone https://github.com/espressif/esp-idf.git
+git clone --recurse-submodules https://github.com/MarcelHbg/esp-adf.git
 ```
 
 - setup Paths
 
 ```shell
 export ADF_PATH=~/uPy-adf/esp-adf
-export IDF_PATH=~/uPy-adf/esp-idf
-```
-
-- setup esp-idf
-
-```shell
-cd $IDF_PATH
-git checkout 6ccb4cf5b7d1fdddb8c2492f9cbc926abaf230df
-git submodule update --init
-```
-
-- setup esp-adf (v2.2 needed because esp-adf-libs changed in higher versions)
-
-```shell
-cd $ADF_PATH
-git checkout d32cf8a4eeeadb99cb11d48a064a5020bf2b899a
-git submodule update --init
-```
-
-- setup micropython
-
-```shell
-cd $ADF_PATH/micropython_adf
-git clone https://github.com/micropython/micropython
-cd micropython
-git checkout 1f371947309c5ea6023b6d9065415697cbc75578
-git submodule update --init
+export IDF_PATH=~/uPy-adf/esp-adf/esp-idf
 ```
 
 - apply patches
