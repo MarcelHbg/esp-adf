@@ -9,11 +9,11 @@ void a2dp_deinit_bt(bt_a2dp_obj_t *obj);
 
 void a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable);
 
-bool a2dp_connect_to(bt_a2dp_obj_t *obj, int *peer);
+esp_err_t a2dp_connect_to(bt_a2dp_obj_t *obj, esp_bd_addr_t source_bda);
 
 void a2dp_disconnect(bt_a2dp_obj_t *obj);
 
-int *a2dp_get_connected_addr(bt_a2dp_obj_t *obj);
+esp_err_t a2dp_get_connected_addr(bt_a2dp_obj_t *obj, esp_bd_addr_t *remote_bda);
 
 bool a2dp_is_connected(bt_a2dp_obj_t *obj);
 
