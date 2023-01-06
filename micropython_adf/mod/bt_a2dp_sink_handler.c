@@ -670,6 +670,7 @@ void handle_connection_state(uint16_t event, void *p_param){
 
         case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
             ESP_LOGI(AV_TAG, "ESP_A2D_CONNECTION_STATE_DISCONNECTED");
+            obj_g->state = A2DP_OBJ_STARTED;
             if (a2d->conn_stat.disc_rsn==ESP_A2D_DISC_RSN_NORMAL){
                 obj_g->autoreconnect_allowed = false;
             }
@@ -712,7 +713,7 @@ void handle_connection_state(uint16_t event, void *p_param){
 
         case ESP_A2D_CONNECTION_STATE_CONNECTED:
             ESP_LOGI(AV_TAG, "ESP_A2D_CONNECTION_STATE_CONNECTED");
-
+            obj_g->state = A2DP_OBJ_CONNECTED;
             // stop reconnect retries in event loop
             if (obj_g->reconnect_status==IsReconnecting){
                 obj_g->reconnect_status = AutoReconnect;
@@ -745,6 +746,7 @@ void handle_connection_state(uint16_t event, void *p_param){
                 }
 #endif     
             }
+
             break;
 
     } 
