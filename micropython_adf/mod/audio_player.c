@@ -32,6 +32,7 @@
 
 #include "audio_hal.h"
 #include "board.h"
+#include "audio_def.h"
 
 #include "amr_decoder.h"
 #include "mp3_decoder.h"
@@ -149,7 +150,7 @@ STATIC esp_err_t periph_event_cb(audio_event_iface_msg_t *msg, void *ctx)
 
 /********************************************************************************************************/
 
-STATIC esp_audio_handle_t audio_player_create(const char *device_name)
+STATIC esp_audio_handle_t audio_player_create(bool enable_board)
 {
     esp_err_t ret = ESP_OK;
 
@@ -158,37 +159,22 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name)
 
     ESP_LOGI(TAG, "Create Audio player");
 
-    // init bluetooth
-    ESP_LOGI(TAG, "Init Bluetooth");
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ret |= esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-    ret |= esp_bt_controller_init(&bt_cfg);
-    ret |= esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    ret |= esp_bluedroid_init();
-    ret |= esp_bluedroid_enable();
-    if (device_name) ret |= esp_bt_dev_set_device_name(device_name);
-    else ret |= esp_bt_dev_set_device_name("ESP_MPY_SPEAKER");
-    ESP_LOGI(TAG, "BT controller startet (return: %d)", ret);
-
-//#if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0))
-//    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-//#else
-    esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
-//#endif
-    if (device_name) ESP_LOGI(TAG, "BT %s connectable", device_name);
-    else ESP_LOGI(TAG, "BT ESP_MPY_SPEAKER connectable");
-
     // init audio board
-    //ESP_LOGI(TAG, "Initialize Audio Board");
-    //audio_board_handle_t board_handle = audio_board_init();
-    //audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    audio_board_handle_t board_handle = NULL;
+    if(enable_board){
+    ESP_LOGI(TAG, "Initialize Audio Board");
+    board_handle = audio_board_init();
+    audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    }
 
     // init player
     ESP_LOGI(TAG, "Initialize Audio Player");
     esp_audio_cfg_t cfg = DEFAULT_ESP_AUDIO_CONFIG();
-    //cfg.vol_handle = board_handle->audio_hal;
-    //cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
-    //cfg.vol_get = (audio_volume_get)audio_hal_get_volume;
+    if(enable_board){
+        cfg.vol_handle = board_handle->audio_hal;
+        cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
+        cfg.vol_get = (audio_volume_get)audio_hal_get_volume;
+    }
     cfg.resample_rate = 48000;
     cfg.prefer_type = ESP_AUDIO_PREFER_MEM;
     esp_audio_handle_t player = esp_audio_create(&cfg);
@@ -257,9 +243,7 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name)
 
 STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *args)
 {
-    mp_arg_check_num(n_args, n_kw, 2, 2, false);
-
-    const char *device_name = mp_obj_str_get_str(args[0]);
+    mp_arg_check_num(n_args, n_kw, 1, 1, false);
 
     static esp_audio_handle_t basic_player = NULL;
 
@@ -267,13 +251,9 @@ STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, 
     self->base.type = type;
     self->callback = args[1];
     if (basic_player == NULL) {
-        basic_player = audio_player_create(device_name);
+        basic_player = audio_player_create(false);
     }
     self->player = basic_player;
-
-    self->bt_periph = NULL;
-    self->periph_set = NULL;
-    self->bt_callback = NULL;
 
     return MP_OBJ_FROM_PTR(self);
 }
@@ -497,16 +477,16 @@ STATIC const mp_rom_map_elem_t player_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_get_state), MP_ROM_PTR(&audio_player_state_obj) },
     { MP_ROM_QSTR(MP_QSTR_pos), MP_ROM_PTR(&audio_player_pos_obj) },
     { MP_ROM_QSTR(MP_QSTR_time), MP_ROM_PTR(&audio_player_time_obj) },
-    { MP_ROM_QSTR(MP_QSTR_bt_callback), MP_ROM_PTR(&audio_player_bt_callback_obj) },
+    //{ MP_ROM_QSTR(MP_QSTR_bt_callback), MP_ROM_PTR(&audio_player_bt_callback_obj) },
     
     // bt_event_t
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_UNKNOWN         ), MP_ROM_INT(PERIPH_BLUETOOTH_UNKNOWN) },                   /*!< No event */
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_CONNECTED       ), MP_ROM_INT(PERIPH_BLUETOOTH_CONNECTED) },               /*!< A bluetooth device was connected */
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_DISCONNECTED    ), MP_ROM_INT(PERIPH_BLUETOOTH_DISCONNECTED) },         /*!< Last connection was disconnected */
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_STARTED   ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_STARTED) },       /*!< The audio session has been started */
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_SUSPENDED ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_SUSPENDED) },   /*!< The audio session has been suspended */
-    { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_STOPPED   ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_STOPPED) },       /*!< The audio session has been stopped */
-
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_UNKNOWN         ), MP_ROM_INT(PERIPH_BLUETOOTH_UNKNOWN) },                   /*!< No event */
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_CONNECTED       ), MP_ROM_INT(PERIPH_BLUETOOTH_CONNECTED) },               /*!< A bluetooth device was connected */
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_DISCONNECTED    ), MP_ROM_INT(PERIPH_BLUETOOTH_DISCONNECTED) },         /*!< Last connection was disconnected */
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_STARTED   ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_STARTED) },       /*!< The audio session has been started */
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_SUSPENDED ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_SUSPENDED) },   /*!< The audio session has been suspended */
+    //{ MP_ROM_QSTR(MP_QSTR_BLUETOOTH_AUDIO_STOPPED   ), MP_ROM_INT(PERIPH_BLUETOOTH_AUDIO_STOPPED) },       /*!< The audio session has been stopped */
+    
     // esp_audio_status_t
     { MP_ROM_QSTR(MP_QSTR_STATUS_UNKNOWN), MP_ROM_INT(AUDIO_STATUS_UNKNOWN) },
     { MP_ROM_QSTR(MP_QSTR_STATUS_RUNNING), MP_ROM_INT(AUDIO_STATUS_RUNNING) },
