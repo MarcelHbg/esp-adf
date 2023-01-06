@@ -79,10 +79,10 @@ const char *m_a2d_audio_state_str[3] = {"Suspended",
                                         "Started"};
 
 #define RECONNECT_TIMEOUT 5000 // in ms
-#define DEVICENAME_LEN 16
 
 struct _bt_a2dp_obj_t {
-    char device_name[DEVICENAME_LEN];
+    char device_name[A2DP_OBJ_DEVICENAME_MAX_LEN + 1];
+    bt_a2dp_obj_state_t state;
     esp_a2d_audio_state_t audio_state;
     esp_bd_addr_t peer_bd_addr;
     esp_bd_addr_t last_connection;
@@ -97,6 +97,7 @@ struct _bt_a2dp_obj_t {
 };
 #define DEFAULT_A2DP_OBJ_CONFIG() {\
     .device_name = "ESP_A2DP_SINK",\
+    .state = A2DP_OBJ_IDLE,\
     .audio_state = 0,\
     .peer_bd_addr = {0,0,0,0,0,0},\
     .last_connection = {0,0,0,0,0,0},\
@@ -168,76 +169,6 @@ void _log_free_heap(){
 }
 
 /*******************************************************************************************/
-/* init helper functions */
-
-bool _init_bt_controller(){
-    ESP_LOGI(AV_TAG, "init_bt_controller");
-    esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    
-    ESP_LOGI(AV_TAG,"esp_bt_controller_mem_release BLE");
-    if(esp_bt_controller_mem_release(ESP_BT_MODE_BLE) != ESP_OK){
-        ESP_LOGE(AV_TAG,"esp_bt_controller_mem_release BLE failed");
-    }
-
-    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED){
-        ESP_LOGI(AV_TAG,"BT enabled"); 
-        return true;
-    }
-    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE){
-        esp_bt_controller_init(&cfg);
-        while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE){}
-    }
-    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED){
-        if (esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)) {
-            ESP_LOGE(AV_TAG, "BT Enable failed");
-            return false;
-        }
-    }
-    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED){
-        ESP_LOGI(AV_TAG,"BT enabled"); 
-        return true;
-    }
-
-    ESP_LOGE(AV_TAG, "BT Start failed");
-    return false;
-}
-
-bool _init_bluedroid(){
-    esp_bluedroid_status_t bt_stack_status = esp_bluedroid_get_status();
-
-    if(bt_stack_status == ESP_BLUEDROID_STATUS_UNINITIALIZED){
-        if (esp_bluedroid_init() != ESP_OK) {
-            ESP_LOGE(AV_TAG,"Failed to initialize bluedroid");
-            return false;
-        }
-        ESP_LOGI(AV_TAG,"bluedroid initialized");
-    }
-
-    while(bt_stack_status != ESP_BLUEDROID_STATUS_ENABLED){
-        if (esp_bluedroid_enable() != ESP_OK) {
-            ESP_LOGE(AV_TAG,"Failed to enable bluedroid");
-            delay(100);
-            //return false;
-        } else {
-            ESP_LOGI(AV_TAG,"bluedroid enabled"); 
-        }
-        bt_stack_status = esp_bluedroid_get_status();
-    }
-
-    if (esp_bt_gap_register_callback(bt_gap_callback) != ESP_OK) {
-        ESP_LOGE(AV_TAG,"gap register failed");
-        return false;
-    }
-    /*
-    if ((esp_spp_init(esp_spp_mode)) != ESP_OK) {
-        ESP_LOGE(AV_TAG,"esp_spp_init failed");
-        return false;
-    }*/
-
-    return true;
-}
-
-/*******************************************************************************************/
 /* public bt_a2dp_sink ADT */
 
 bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
@@ -248,131 +179,238 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
 
     bt_a2dp_obj_t *obj = malloc(sizeof(bt_a2dp_obj_t));
     if(!obj) {
-        ESP_LOGE(AV_TAG,"%s: malloc failed", __func__);
+        ESP_LOGE(AV_TAG,"[%s] malloc failed", __func__);
         return NULL;
     }
 
-    ESP_LOGI(AV_TAG, "%s: init default obj", __func__);
+    ESP_LOGI(AV_TAG, "[%s] init default obj", __func__);
     bt_a2dp_obj_t a2dp_obj = DEFAULT_A2DP_OBJ_CONFIG();
     memcpy(obj, &a2dp_obj, sizeof(bt_a2dp_obj_t));
 
-    strncpy(obj->device_name, device_name, DEVICENAME_LEN);
-    obj->device_name[DEVICENAME_LEN - 1] = '\0'; // enshure nulltermination
-    ESP_LOGI(AV_TAG, "%s: device name is set to: %s", __func__, obj->device_name);
+    if (device_name){
+        strncpy(obj->device_name, device_name, A2DP_OBJ_DEVICENAME_MAX_LEN);
+        obj->device_name[A2DP_OBJ_DEVICENAME_MAX_LEN] = '\0'; // enshure nulltermination
+        ESP_LOGI(AV_TAG, "[%s] device name is set to: %s", __func__, obj->device_name);
+    }
+
+    // save mem -> BLE not needed
+    if(esp_bt_controller_mem_release(ESP_BT_MODE_BLE) != ESP_OK){
+        ESP_LOGE(AV_TAG,"[%s] esp_bt_controller_mem_release BLE failed", __func__);
+    }
+
+    esp_err_t err = ESP_OK;
+
+    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE){
+        ESP_LOGI(AV_TAG, "init bt controller ...");
+        esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+        err = esp_bt_controller_init(&cfg);
+        if (err){
+            ESP_LOGE(AV_TAG, "[%s] esp_bt_controller_init err=%d", __func__, err);
+            free(obj);
+            return NULL;
+        }
+        while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE){}
+    }
+    ESP_LOGI(AV_TAG, "bt controller initialized");
+    
+    if(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED){
+        ESP_LOGI(AV_TAG, "init bluedroid ...");
+        err = esp_bluedroid_init();
+        if (err) {
+            ESP_LOGE(AV_TAG,"[%s] esp_bluedroid_init err=%d", __func__, err);
+            free(obj);
+            return NULL;
+        }
+    }
+    ESP_LOGI(AV_TAG,"bluedroid initialized");
+
+    obj->state = A2DP_OBJ_INITED;
 
     // save address global
     obj_g = obj;
 
-    if(!_init_bt_controller()){
-        return NULL;
-    }
-
-    if(!_init_bluedroid()){
-        return NULL;
-    }
-
-    // create application task 
-    ESP_LOGI(AV_TAG, "%s: start_app_task", __func__);
-    app_task_start_up(&obj_g->app_task);
-
-    // Bluetooth device name, connection mode and profile set up
-    ESP_LOGI(AV_TAG, "%s: dispatch app stackup event", __func__);
-    app_work_dispatch(hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0);
-
+    ESP_LOGI(AV_TAG, "a2dp sink obj initialized");
     return obj;
 }
 
 void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
     if (!obj) {
-        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return;
     }
 
-    a2dp_disconnect(obj);
-    while(a2dp_is_connected(obj)){
-        delay(100);
+    esp_err_t err = ESP_OK;
+
+    if(obj->state >= A2DP_OBJ_STARTED){
+        a2dp_sink_stop(obj);
     }
 
-    ESP_LOGI(AV_TAG,"deinit avrc");
-    if (esp_avrc_ct_deinit() != ESP_OK){
-         ESP_LOGE(AV_TAG,"Failed to deinit avrc");
+    err = esp_bluedroid_deinit();
+    if (err){
+        ESP_LOGE(AV_TAG, "[%s] esp_bluedroid_deinit err=%d", __func__, err);
     }
-    _log_free_heap();
-
-    ESP_LOGI(AV_TAG,"disable bluetooth");
-    if (esp_bluedroid_disable() != ESP_OK){
-        ESP_LOGE(AV_TAG,"Failed to disable bluetooth");
-    }
-    _log_free_heap();
-
-    ESP_LOGI(AV_TAG,"deinit bluetooth");
-    if (esp_bluedroid_deinit() != ESP_OK){
-        ESP_LOGE(AV_TAG,"Failed to deinit bluetooth");
-    }
-    _log_free_heap();
-
-    ESP_LOGI(AV_TAG,"esp_bt_controller_disable");
-    if (esp_bt_controller_disable() != ESP_OK){
-        ESP_LOGE(AV_TAG,"esp_bt_controller_disable failed");
-    }
+    ESP_LOGI(AV_TAG, "bluedroid deinitialized");
     _log_free_heap();
 
     // waiting for status change
     while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED)
         delay(50);
-
-    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED){
-        ESP_LOGI(AV_TAG,"esp_bt_controller_deinit");
-        if (esp_bt_controller_deinit() != ESP_OK){
-            ESP_LOGE(AV_TAG,"esp_bt_controller_deinit failed");
-        }
-        _log_free_heap();
+    
+    err = esp_bt_controller_deinit();
+    if (err){
+        ESP_LOGE(AV_TAG, "[%s] esp_bt_controller_deinit err=%d", __func__, err);
     }
-
-    app_task_shut_down(&obj_g->app_task);
+    ESP_LOGI(AV_TAG, "bt controller deinitialized");
+    _log_free_heap();
 
     free(obj);
     obj = NULL;
     obj_g = NULL;
+
+    ESP_LOGI(AV_TAG, "a2dp sink obj deinitialized");
 }
 
-void a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
-    ESP_LOGI(AV_TAG, "a2dp_set_bt_connectable %s", _bool_to_str(connectable));             
-    if (connectable){
-        if (esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE) != ESP_OK){
-            ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode");            
-        }
-        obj->is_connectable = true;
-    } else {
-        if (esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_NONE) != ESP_OK){
-            ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode");            
-        }    
-        obj->is_connectable = false;
-    }
-}
-
-esp_err_t a2dp_connect_to(bt_a2dp_obj_t *obj, esp_bd_addr_t source_bda){
+esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
     if (!obj) {
-        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGW(AV_TAG, "connect_to to %s", _bd_addr_to_str(source_bda));
-    a2dp_set_bt_connectable(obj, true);
-    delay(100);
-    esp_err_t err = esp_a2d_sink_connect(source_bda);
+    esp_err_t err = ESP_OK;
 
-    if (err!=ESP_OK){
-        ESP_LOGE(AV_TAG, "esp_a2d_source_connect:%d", err);
+    esp_bt_controller_status_t bt_state = esp_bt_controller_get_status();
+    if(bt_state == ESP_BT_CONTROLLER_STATUS_IDLE){
+        ESP_LOGE(AV_TAG, "[%s] bt controller not initialized", __func__);
+        return ESP_ERR_ADF_UNINITIALIZED;
+    }
+    if(bt_state == ESP_BT_CONTROLLER_STATUS_INITED){
+        ESP_LOGI(AV_TAG, "enable bt controller ...");
+        err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+        if (err) {
+            ESP_LOGE(AV_TAG, "[%s] bt controller enable err=%d", __func__, err);
+            return err;
+        }
+    }
+    ESP_LOGI(AV_TAG, "bt controller enabled");
+
+    esp_bluedroid_status_t bt_stack_status = esp_bluedroid_get_status();
+    if(bt_stack_status == ESP_BLUEDROID_STATUS_UNINITIALIZED){
+        ESP_LOGE(AV_TAG, "[%s] bluedroid not initialized", __func__);
+        return ESP_ERR_ADF_UNINITIALIZED;
+    }
+    if(bt_stack_status == ESP_BLUEDROID_STATUS_INITIALIZED){
+        ESP_LOGI(AV_TAG, "enable bluedroid ...");
+        err = esp_bluedroid_enable();
+        if (err) {
+            ESP_LOGE(AV_TAG, "[%s] bluedroid enable err=%d", __func__, err);
+            return err;
+        }
+    }
+    ESP_LOGI(AV_TAG,"bluedroid enabled"); 
+
+    err = esp_bt_gap_register_callback(bt_gap_callback);
+    if (err) {
+        ESP_LOGE(AV_TAG,"[%s] gap register callback err=%d", __func__, err);
+        return false;
+    }
+
+    // create application task 
+    ESP_LOGI(AV_TAG, "[%s] start app task", __func__);
+    app_task_start_up(obj->app_task);
+
+    // Bluetooth device name, connection mode and profile set up
+    ESP_LOGI(AV_TAG, "[%s] dispatch app stackup event", __func__);
+    app_work_dispatch(hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0);
+
+    return err;
+}
+
+esp_err_t a2dp_sink_stop(bt_a2dp_obj_t *obj){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = ESP_OK;
+
+    err = a2dp_sink_disconnect(obj);
+    if(err) return err;
+    while(a2dp_is_connected(obj)){
+        delay(100);
+    }
+
+    err = esp_avrc_ct_deinit();
+    if (err){
+        ESP_LOGE(AV_TAG, "[%s] esp_avrc_ct_deinit err=%d", __func__, err);
+    }
+    _log_free_heap();
+
+    err = esp_bluedroid_disable();
+    if (err){
+        ESP_LOGE(AV_TAG, "[%s] esp_bluedroid_disable err=%d", __func__, err);
+    }
+    _log_free_heap();
+
+    err = esp_bt_controller_disable();
+    if (err){
+        ESP_LOGE(AV_TAG, "[%s] esp_bt_controller_disable err=%d", __func__, err);
+    }
+    _log_free_heap();
+
+    // shut down app task
+    app_task_shut_down(&obj_g->app_task);
+    
+    obj->state = A2DP_OBJ_INITED;
+
+    return err;
+}
+
+esp_err_t a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(AV_TAG, "[%s] set to: %s",__func__, _bool_to_str(connectable));    
+    esp_bt_scan_mode_t mode = connectable ? ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE : ESP_BT_SCAN_MODE_NONE;
+    esp_err_t res = esp_bt_gap_set_scan_mode(mode);
+
+    if (res != ESP_OK) {
+        ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode err=%d", res);
+        obj->is_connectable = false;
+    }
+    else {
+        obj->is_connectable = true;
+    }
+    
+    return res;
+}
+
+esp_err_t a2dp_sink_connect_to_source(bt_a2dp_obj_t *obj, esp_bd_addr_t source_bda){
+    if (!obj) {
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(AV_TAG, "[%s] %s",__func__, _bd_addr_to_str(source_bda));
+
+    esp_err_t err = a2dp_set_bt_connectable(obj, true);
+    if (err) return err;
+
+    delay(100);
+    err = esp_a2d_sink_connect(source_bda);
+    if (err){
+        ESP_LOGE(AV_TAG, "esp_a2d_source_connect err=%d", err);
+        return err;
     }
 
     return ESP_OK;
 }
 
-void a2dp_disconnect(bt_a2dp_obj_t *obj){
+esp_err_t a2dp_sink_disconnect(bt_a2dp_obj_t *obj){
     if (!obj) {
-        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
-        return;
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_ARG;
     }
 
     ESP_LOGI(AV_TAG, "disconnect a2dp: %s", _bd_addr_to_str(obj->last_connection));
@@ -380,10 +418,12 @@ void a2dp_disconnect(bt_a2dp_obj_t *obj){
     // Prevent automatic reconnect
     obj->autoreconnect_allowed = false;
 
-    esp_err_t status = esp_a2d_sink_disconnect(obj->last_connection);
-    if (status == ESP_FAIL) {
-        ESP_LOGE(AV_TAG, "Failed disconnecting to device!");
+    esp_err_t err = esp_a2d_sink_disconnect(obj->last_connection);
+    if (err) {
+        ESP_LOGE(AV_TAG, "[%s] disconnecting err=%d",__func__, err);
     }
+
+    return err;
 }
 
 esp_err_t a2dp_get_connected_addr(bt_a2dp_obj_t *obj, esp_bd_addr_t *remote_bda){
@@ -408,15 +448,16 @@ esp_err_t a2dp_get_connected_addr(bt_a2dp_obj_t *obj, esp_bd_addr_t *remote_bda)
 
 bool a2dp_is_connected(bt_a2dp_obj_t *obj){
     if (!obj) {
-        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return false;
     }
     return obj->connection_state == ESP_A2D_CONNECTION_STATE_CONNECTED;
 }
 
+// not defined in API for now
 void a2dp_set_autoreconnect(bt_a2dp_obj_t *obj, bool state){
     if (!obj) {
-        ESP_LOGE(AV_TAG, "%s:bt_a2dp_obj_t is NULL", __func__);
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return;
     }
     obj->reconnect_status = state ? AutoReconnect : NoReconnect;
@@ -424,7 +465,7 @@ void a2dp_set_autoreconnect(bt_a2dp_obj_t *obj, bool state){
 }
 
 /*******************************************************************************************/
-/* app task methods */
+/* app task functions */
 
 bool app_send_msg(app_msg_t *msg)
 {
@@ -567,7 +608,7 @@ bool reconnect() {
     obj_g->autoreconnect_allowed = true;
     obj_g->reconnect_status = IsReconnecting;
     obj_g->reconnect_timout = millis() + RECONNECT_TIMEOUT;
-    return a2dp_connect_to(obj_g, obj_g->peer_bd_addr);
+    return a2dp_sink_connect_to_source(obj_g, obj_g->peer_bd_addr);
 }
 
  bool is_reconnect(esp_a2d_disc_rsn_t type) {
@@ -749,6 +790,8 @@ void hdl_stack_evt(uint16_t event, void *p_param)
             ESP_LOGI(AV_TAG, "a2dp_set_bt_connectable(true)");
             a2dp_set_bt_connectable(obj_g, true);
             break;
+
+            obj_g->state = A2DP_OBJ_STARTED;
         }
 
         default:
@@ -920,7 +963,6 @@ void bt_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) 
     }
     return;
 }
-
 
 void avrc_callback(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param) {
     ESP_LOGI(AV_TAG, "%s", __func__);
