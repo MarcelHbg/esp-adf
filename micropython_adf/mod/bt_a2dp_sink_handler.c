@@ -83,6 +83,11 @@ const char *m_a2d_audio_state_str[3] = {"Suspended",
 struct _bt_a2dp_obj_t {
     char device_name[A2DP_OBJ_DEVICENAME_MAX_LEN + 1];
     bt_a2dp_obj_state_t state;
+    a2dp_task_t app_task;
+    a2dp_connection_hdl_t connection_hdl_cb;
+    void * connection_hdl_ctx;
+    a2dp_audio_hdl_t audio_hdl_cb;
+    void * audio_hdl_ctx;
     esp_a2d_audio_state_t audio_state;
     esp_bd_addr_t peer_bd_addr;
     esp_bd_addr_t last_connection;
@@ -93,11 +98,15 @@ struct _bt_a2dp_obj_t {
     uint8_t retry_max_count;
     reconnect_status_t reconnect_status;
     unsigned long reconnect_timout;
-    a2dp_task_t app_task;
 };
 #define DEFAULT_A2DP_OBJ_CONFIG() {\
     .device_name = "ESP_A2DP_SINK",\
-    .state = A2DP_OBJ_IDLE,\
+    .state = A2DP_OBJ_STATE_IDLE,\
+    .app_task = DEFAULT_A2DP_TASK_CONFIG(),\
+    .connection_hdl_cb = NULL,\
+    .connection_hdl_ctx = NULL,\
+    .audio_hdl_cb = NULL,\
+    .audio_hdl_ctx = NULL,\
     .audio_state = 0,\
     .peer_bd_addr = {0,0,0,0,0,0},\
     .last_connection = {0,0,0,0,0,0},\
@@ -108,7 +117,6 @@ struct _bt_a2dp_obj_t {
     .retry_max_count = 5,\
     .reconnect_status = AutoReconnect,\
     .reconnect_timout = 0,\
-    .app_task = DEFAULT_A2DP_TASK_CONFIG(),\
 }
 
 /*******************************************************************************************/
@@ -224,7 +232,7 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
     }
     ESP_LOGI(AV_TAG, "bt controller enabled");
 
-    obj->state = A2DP_OBJ_INITED;
+    obj->state = A2DP_OBJ_STATE_INITED;
 
     // save address global
     obj_g = obj;
@@ -241,7 +249,7 @@ void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
 
     esp_err_t err = ESP_OK;
 
-    if(obj->state >= A2DP_OBJ_STARTED){
+    if(obj->state >= A2DP_OBJ_STATE_STARTED){
         a2dp_sink_stop(obj);
     }
 
@@ -277,7 +285,7 @@ esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
 
     esp_err_t err = ESP_OK;
 
-    if(obj->state >= A2DP_OBJ_STARTED){
+    if(obj->state >= A2DP_OBJ_STATE_STARTED){
         ESP_LOGI(AV_TAG, "[%s] allready started", __func__);
         return err;
     }
@@ -366,7 +374,7 @@ esp_err_t a2dp_sink_stop(bt_a2dp_obj_t *obj){
     // shut down app task
     app_task_shut_down(&obj_g->app_task);
     
-    obj->state = A2DP_OBJ_INITED;
+    obj->state = A2DP_OBJ_STATE_INITED;
 
     return err;
 }
@@ -377,11 +385,11 @@ esp_err_t a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if(obj->state == A2DP_OBJ_INITED){
+    if(obj->state == A2DP_OBJ_STATE_INITED){
         ESP_LOGE(AV_TAG, "[%s] not started", __func__);
         return ESP_ERR_INVALID_STATE;
     }
-    if(obj->state == A2DP_OBJ_CONNECTED){
+    if(obj->state == A2DP_OBJ_STATE_CONNECTED){
         ESP_LOGE(AV_TAG, "[%s] allready connected", __func__);
         return ESP_ERR_INVALID_STATE;
     }
@@ -428,7 +436,7 @@ esp_err_t a2dp_sink_disconnect(bt_a2dp_obj_t *obj){
         return ESP_ERR_INVALID_STATE;
     }
 
-    if(obj->state == A2DP_OBJ_INITED){
+    if(obj->state == A2DP_OBJ_STATE_INITED){
         ESP_LOGE(AV_TAG, "[%s] not started", __func__);
         return ESP_ERR_INVALID_STATE;
     }
@@ -476,6 +484,44 @@ bool a2dp_is_connected(bt_a2dp_obj_t *obj){
 
     // in every state possible default connection_state = ESP_A2D_CONNECTION_STATE_DISCONNECTED
     return obj->connection_state == ESP_A2D_CONNECTION_STATE_CONNECTED;
+}
+
+esp_err_t a2dp_sink_register_connection_handler(bt_a2dp_obj_t *obj, a2dp_connection_hdl_t handler, void *context){
+    if(!obj) { // determines in IDLE state (not initalized)
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if(!handler){
+        ESP_LOGW(AV_TAG, "[%s] handler is NULL", __func__);
+    }
+
+    if(obj->connection_hdl_cb){
+        ESP_LOGE(AV_TAG, "[%s] connection_hdl_cb overwritten", __func__);
+    }
+    obj->connection_hdl_cb = handler;
+    obj->connection_hdl_ctx = context;
+
+    return ESP_OK;
+}
+
+esp_err_t a2dp_sink_register_audio_handler(bt_a2dp_obj_t *obj, a2dp_audio_hdl_t handler, void *context){
+    if(!obj) { // determines in IDLE state (not initalized)
+        ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if(!handler){
+        ESP_LOGW(AV_TAG, "[%s] handler is NULL", __func__);
+    }
+
+    if(obj->audio_hdl_cb){
+        ESP_LOGE(AV_TAG, "[%s] audio_hdl_cb overwritten", __func__);
+    }
+    obj->audio_hdl_cb = handler;
+    obj->audio_hdl_ctx = context;
+
+    return ESP_OK;
 }
 
 // not defined in API for now
@@ -644,6 +690,16 @@ bool reconnect() {
 /*******************************************************************************************/
 /* event handler helper funktions*/
 
+bt_a2dp_obj_connect_state_t connect_state_convert(esp_a2d_connection_state_t state, esp_a2d_disc_rsn_t disc_rsn){
+    switch (state){
+        case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+            if(disc_rsn == ESP_A2D_DISC_RSN_NORMAL) return A2DP_OBJ_CONNECTION_DISCONNECTED;
+            else return A2DP_OBJ_CONNECTION_LOST;
+        default:
+            return state;
+    }
+}
+
 void handle_connection_state(uint16_t event, void *p_param){
     ESP_LOGI(AV_TAG, "%s evt %d", __func__, event);
     esp_a2d_cb_param_t* a2d = (esp_a2d_cb_param_t *)(p_param);
@@ -670,7 +726,7 @@ void handle_connection_state(uint16_t event, void *p_param){
 
         case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
             ESP_LOGI(AV_TAG, "ESP_A2D_CONNECTION_STATE_DISCONNECTED");
-            obj_g->state = A2DP_OBJ_STARTED;
+            obj_g->state = A2DP_OBJ_STATE_STARTED;
             if (a2d->conn_stat.disc_rsn==ESP_A2D_DISC_RSN_NORMAL){
                 obj_g->autoreconnect_allowed = false;
             }
@@ -713,7 +769,7 @@ void handle_connection_state(uint16_t event, void *p_param){
 
         case ESP_A2D_CONNECTION_STATE_CONNECTED:
             ESP_LOGI(AV_TAG, "ESP_A2D_CONNECTION_STATE_CONNECTED");
-            obj_g->state = A2DP_OBJ_CONNECTED;
+            obj_g->state = A2DP_OBJ_STATE_CONNECTED;
             // stop reconnect retries in event loop
             if (obj_g->reconnect_status==IsReconnecting){
                 obj_g->reconnect_status = AutoReconnect;
@@ -817,7 +873,7 @@ void hdl_stack_evt(uint16_t event, void *p_param)
             a2dp_set_bt_connectable(obj_g, true);
             break;
 
-            obj_g->state = A2DP_OBJ_STARTED;
+            obj_g->state = A2DP_OBJ_STATE_STARTED;
         }
 
         default:
@@ -897,16 +953,30 @@ void hdl_avrc_evt(uint16_t event, void *p_param) {
 
 void hdl_a2dp_evt(uint16_t event, void *p_param) {
     ESP_LOGI(AV_TAG, "%s evt %d", __func__, event);
+    esp_a2d_cb_param_t* param = (esp_a2d_cb_param_t *)(p_param);
+    esp_err_t err = ESP_OK;
     switch (event) {
         case ESP_A2D_CONNECTION_STATE_EVT: {
             ESP_LOGI(AV_TAG, "%s ESP_A2D_CONNECTION_STATE_EVT", __func__);
-            handle_connection_state(event, p_param);
+            handle_connection_state(event, p_param); // internal handler
+            if(obj_g->connection_hdl_cb){ // external handler
+                bt_a2dp_obj_connect_state_t conn_state = connect_state_convert(param->conn_stat.state, param->conn_stat.disc_rsn);
+                err = obj_g->connection_hdl_cb(conn_state, obj_g->connection_hdl_ctx);
+                if(err){
+                    ESP_LOGE(AV_TAG, "[%s] connection_hdl_cb state=%d err=%d",__func__, conn_state, err);
+                }
+            }
         } break;
 
         case ESP_A2D_AUDIO_STATE_EVT: {
             ESP_LOGI(AV_TAG, "%s ESP_A2D_AUDIO_STATE_EVT", __func__);
-            //handle_audio_state(event, p_param);
-            
+            //handle_audio_state(event, p_param); // internal handler
+            if(obj_g->audio_hdl_cb){ // external handler
+                err = obj_g->audio_hdl_cb(param->audio_stat.state, obj_g->audio_hdl_ctx);
+                if(err){
+                    ESP_LOGE(AV_TAG, "[%s] connection_hdl_cb err=%d",__func__, err);
+                }
+            }
         } break;
         case ESP_A2D_AUDIO_CFG_EVT: {
             ESP_LOGI(AV_TAG, "%s ESP_A2D_AUDIO_CFG_EVT", __func__);

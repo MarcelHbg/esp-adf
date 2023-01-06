@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_bt_defs.h"
+#include "esp_a2dp_api.h"
 
 #include "bt_a2dp_sink_handler.h"
 
@@ -14,10 +15,26 @@ static const char *TAG = "MPY_A2DPSink";
 
 typedef struct _mp_a2dp_sink_obj_t {
     mp_obj_base_t base;
-    //mp_obj_t callback;
-
+    mp_obj_t connection_callback;
+    mp_obj_t audio_callback;
     bt_a2dp_obj_t *a2dp_sink;
 } mp_a2dp_sink_obj_t;
+
+STATIC esp_err_t a2dp_connection_hdl_cb(bt_a2dp_obj_connect_state_t state, void *context){
+    mp_a2dp_sink_obj_t *self = (mp_a2dp_sink_obj_t *)context;
+    if (self->connection_callback != mp_const_none) {
+        mp_sched_schedule(self->connection_callback, mp_obj_new_int(state));
+    }
+    return ESP_OK;
+}
+
+STATIC esp_err_t a2dp_audio_hdl_cb(esp_a2d_audio_state_t state, void *context){
+    mp_a2dp_sink_obj_t *self = (mp_a2dp_sink_obj_t *)context;
+    if (self->audio_callback != mp_const_none) {
+        mp_sched_schedule(self->audio_callback, mp_obj_new_int(state));
+    }
+    return ESP_OK;
+}
 
 static bt_a2dp_obj_t *a2dp_sink_obj = NULL;
 
@@ -35,7 +52,12 @@ STATIC mp_obj_t mp_a2dp_make_new(const mp_obj_type_t *type, size_t n_args, size_
     // mp multiple objects possible but they reference all the same bt_a2dp_obj_t
     mp_a2dp_sink_obj_t *self = m_new_obj_with_finaliser(mp_a2dp_sink_obj_t);
     self->base.type = type;
+    self->connection_callback = mp_const_none;
+    self->audio_callback = mp_const_none;
     self->a2dp_sink = a2dp_sink_obj;
+
+    a2dp_sink_register_connection_handler(a2dp_sink_obj, a2dp_connection_hdl_cb, self);
+    a2dp_sink_register_audio_handler(a2dp_sink_obj, a2dp_audio_hdl_cb, self);
 
     return MP_OBJ_FROM_PTR(self);
 }
@@ -132,6 +154,20 @@ STATIC mp_obj_t mp_a2dp_is_connected(mp_obj_t self_obj){
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mp_a2dp_is_connected_obj, mp_a2dp_is_connected);
 
+STATIC mp_obj_t mp_a2dp_set_connection_cb(mp_obj_t self_obj, mp_obj_t callback){
+    mp_a2dp_sink_obj_t *self = self_obj;
+    self->connection_callback = callback;
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(mp_a2dp_set_connection_cb_obj, mp_a2dp_set_connection_cb);
+
+STATIC mp_obj_t mp_a2dp_set_audio_cb(mp_obj_t self_obj, mp_obj_t callback){
+    mp_a2dp_sink_obj_t *self = self_obj;
+    self->audio_callback = callback;
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(mp_a2dp_set_audio_cb_obj, mp_a2dp_set_audio_cb);
+
 STATIC const mp_rom_map_elem_t a2dp_sink_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_start), MP_ROM_PTR(&mp_a2dp_sink_start_obj) },
     { MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&mp_a2dp_sink_stop_obj) },
@@ -140,7 +176,22 @@ STATIC const mp_rom_map_elem_t a2dp_sink_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_disconnectSource), MP_ROM_PTR(&mp_a2dp_disconnect_obj) },
     { MP_ROM_QSTR(MP_QSTR_getRemoteAddr), MP_ROM_PTR(&mp_a2dp_get_connected_addr_obj) },
     { MP_ROM_QSTR(MP_QSTR_isConnected), MP_ROM_PTR(&mp_a2dp_is_connected_obj) },
-    { MP_ROM_QSTR(MP_QSTR___del__), MP_ROM_PTR(&mp_a2dp_delete_obj) },  
+    { MP_ROM_QSTR(MP_QSTR___del__), MP_ROM_PTR(&mp_a2dp_delete_obj) }, 
+    { MP_ROM_QSTR(MP_QSTR_setConnectionStateCb), MP_ROM_PTR(&mp_a2dp_set_connection_cb_obj) }, 
+    { MP_ROM_QSTR(MP_QSTR_setAudioStateCb), MP_ROM_PTR(&mp_a2dp_set_audio_cb_obj) }, 
+
+    // connection states
+    { MP_ROM_QSTR(MP_QSTR_CONNECTION_CONNECTED), MP_ROM_INT(A2DP_OBJ_CONNECTION_CONNECTED) },
+    { MP_ROM_QSTR(MP_QSTR_CONNECTION_CONNECTING), MP_ROM_INT(A2DP_OBJ_CONNECTION_CONNECTING) }, 
+    { MP_ROM_QSTR(MP_QSTR_CONNECTION_DISCONNECTED), MP_ROM_INT(A2DP_OBJ_CONNECTION_DISCONNECTED) }, 
+    { MP_ROM_QSTR(MP_QSTR_CONNECTION_DISCONNECTING), MP_ROM_INT(A2DP_OBJ_CONNECTION_DISCONNECTING) }, 
+    { MP_ROM_QSTR(MP_QSTR_CONNECTION_CONNECTION_LOST), MP_ROM_INT(A2DP_OBJ_CONNECTION_LOST) },
+
+    // audio states
+    { MP_ROM_QSTR(MP_QSTR_AUDIO_REMOTE_SUSPEND), MP_ROM_INT(ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND) },
+    { MP_ROM_QSTR(MP_QSTR_AUDIO_STARTED), MP_ROM_INT(ESP_A2D_AUDIO_STATE_STARTED) },
+    { MP_ROM_QSTR(MP_QSTR_AUDIO_STOPPED), MP_ROM_INT(ESP_A2D_AUDIO_STATE_STOPPED) },
+ 
 };
 
 STATIC MP_DEFINE_CONST_DICT(a2dp_sink_locals_dict, a2dp_sink_locals_dict_table);
