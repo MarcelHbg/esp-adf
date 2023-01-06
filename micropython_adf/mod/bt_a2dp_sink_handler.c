@@ -101,7 +101,7 @@ struct _bt_a2dp_obj_t {
     .audio_state = 0,\
     .peer_bd_addr = {0,0,0,0,0,0},\
     .last_connection = {0,0,0,0,0,0},\
-    .connection_state = 0,\
+    .connection_state = ESP_A2D_CONNECTION_STATE_DISCONNECTED,\
     .is_connectable = false,\
     .autoreconnect_allowed = false,\
     .retry_count = 0,\
@@ -212,17 +212,17 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
         while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE){}
     }
     ESP_LOGI(AV_TAG, "bt controller initialized");
-    
-    if(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED){
-        ESP_LOGI(AV_TAG, "init bluedroid ...");
-        err = esp_bluedroid_init();
+
+    if(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED){
+        ESP_LOGI(AV_TAG, "enable bt controller ...");
+        err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
         if (err) {
-            ESP_LOGE(AV_TAG,"[%s] esp_bluedroid_init err=%d", __func__, err);
+            ESP_LOGE(AV_TAG, "[%s] bt controller enable err=%d", __func__, err);
             free(obj);
             return NULL;
         }
     }
-    ESP_LOGI(AV_TAG,"bluedroid initialized");
+    ESP_LOGI(AV_TAG, "bt controller enabled");
 
     obj->state = A2DP_OBJ_INITED;
 
@@ -234,7 +234,7 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
 }
 
 void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return;
     }
@@ -245,12 +245,11 @@ void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
         a2dp_sink_stop(obj);
     }
 
-    err = esp_bluedroid_deinit();
+    // deinit controller
+    err = esp_bt_controller_disable();
     if (err){
-        ESP_LOGE(AV_TAG, "[%s] esp_bluedroid_deinit err=%d", __func__, err);
+        ESP_LOGE(AV_TAG, "[%s] esp_bt_controller_disable err=%d", __func__, err);
     }
-    ESP_LOGI(AV_TAG, "bluedroid deinitialized");
-    _log_free_heap();
 
     // waiting for status change
     while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED)
@@ -271,40 +270,36 @@ void a2dp_deinit_bt(bt_a2dp_obj_t *obj){
 }
 
 esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
 
     esp_err_t err = ESP_OK;
 
-    esp_bt_controller_status_t bt_state = esp_bt_controller_get_status();
-    if(bt_state == ESP_BT_CONTROLLER_STATUS_IDLE){
-        ESP_LOGE(AV_TAG, "[%s] bt controller not initialized", __func__);
-        return ESP_ERR_ADF_UNINITIALIZED;
+    if(obj->state >= A2DP_OBJ_STARTED){
+        ESP_LOGI(AV_TAG, "[%s] allready started", __func__);
+        return err;
     }
-    if(bt_state == ESP_BT_CONTROLLER_STATUS_INITED){
-        ESP_LOGI(AV_TAG, "enable bt controller ...");
-        err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+
+    if(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED){
+        ESP_LOGI(AV_TAG, "init bluedroid ...");
+        err = esp_bluedroid_init();
         if (err) {
-            ESP_LOGE(AV_TAG, "[%s] bt controller enable err=%d", __func__, err);
+            ESP_LOGE(AV_TAG,"[%s] esp_bluedroid_init err=%d", __func__, err);
             return err;
         }
     }
-    ESP_LOGI(AV_TAG, "bt controller enabled");
+    ESP_LOGI(AV_TAG,"bluedroid initialized");
 
-    esp_bluedroid_status_t bt_stack_status = esp_bluedroid_get_status();
-    if(bt_stack_status == ESP_BLUEDROID_STATUS_UNINITIALIZED){
-        ESP_LOGE(AV_TAG, "[%s] bluedroid not initialized", __func__);
-        return ESP_ERR_ADF_UNINITIALIZED;
-    }
-    if(bt_stack_status == ESP_BLUEDROID_STATUS_INITIALIZED){
+    if(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_INITIALIZED){
         ESP_LOGI(AV_TAG, "enable bluedroid ...");
         err = esp_bluedroid_enable();
         if (err) {
             ESP_LOGE(AV_TAG, "[%s] bluedroid enable err=%d", __func__, err);
             return err;
         }
+        while(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED){}
     }
     ESP_LOGI(AV_TAG,"bluedroid enabled"); 
 
@@ -326,35 +321,46 @@ esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
 }
 
 esp_err_t a2dp_sink_stop(bt_a2dp_obj_t *obj){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
 
     esp_err_t err = ESP_OK;
 
+    // state check not needed here allready done in a2dp_sink_disconnect
     err = a2dp_sink_disconnect(obj);
     if(err) return err;
     while(a2dp_is_connected(obj)){
         delay(100);
     }
 
+    err = esp_a2d_sink_deinit();
+    if(err){
+        ESP_LOGE(AV_TAG, "[%s] esp_a2d_sink_deinit err=%d", __func__, err);
+    }
+    ESP_LOGI(AV_TAG, "A2DP deinitialized");
+    _log_free_heap();
+
     err = esp_avrc_ct_deinit();
     if (err){
         ESP_LOGE(AV_TAG, "[%s] esp_avrc_ct_deinit err=%d", __func__, err);
     }
+    ESP_LOGI(AV_TAG, "AVRC deinitialized");
     _log_free_heap();
 
     err = esp_bluedroid_disable();
     if (err){
         ESP_LOGE(AV_TAG, "[%s] esp_bluedroid_disable err=%d", __func__, err);
     }
+    ESP_LOGI(AV_TAG, "bluedroid disabled");
     _log_free_heap();
 
-    err = esp_bt_controller_disable();
+    err = esp_bluedroid_deinit();
     if (err){
-        ESP_LOGE(AV_TAG, "[%s] esp_bt_controller_disable err=%d", __func__, err);
+        ESP_LOGE(AV_TAG, "[%s] esp_bluedroid_deinit err=%d", __func__, err);
     }
+    ESP_LOGI(AV_TAG, "bluedroid deinitialized");
     _log_free_heap();
 
     // shut down app task
@@ -366,38 +372,47 @@ esp_err_t a2dp_sink_stop(bt_a2dp_obj_t *obj){
 }
 
 esp_err_t a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if(obj->state == A2DP_OBJ_INITED){
+        ESP_LOGE(AV_TAG, "[%s] not started", __func__);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if(obj->state == A2DP_OBJ_CONNECTED){
+        ESP_LOGE(AV_TAG, "[%s] allready connected", __func__);
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(AV_TAG, "[%s] set to: %s",__func__, _bool_to_str(connectable));    
     esp_bt_scan_mode_t mode = connectable ? ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE : ESP_BT_SCAN_MODE_NONE;
-    esp_err_t res = esp_bt_gap_set_scan_mode(mode);
+    esp_err_t err = esp_bt_gap_set_scan_mode(mode);
 
-    if (res != ESP_OK) {
-        ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode err=%d", res);
+    if (err != ESP_OK) {
+        ESP_LOGE(AV_TAG,"esp_bt_gap_set_scan_mode err=%d", err);
         obj->is_connectable = false;
     }
     else {
         obj->is_connectable = true;
     }
     
-    return res;
+    return err;
 }
 
 esp_err_t a2dp_sink_connect_to_source(bt_a2dp_obj_t *obj, esp_bd_addr_t source_bda){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(AV_TAG, "[%s] %s",__func__, _bd_addr_to_str(source_bda));
-
+    // state check not needed here allready done in a2dp_set_bt_connectable
     esp_err_t err = a2dp_set_bt_connectable(obj, true);
     if (err) return err;
-
     delay(100);
+
+    ESP_LOGI(AV_TAG, "[%s] %s",__func__, _bd_addr_to_str(source_bda));
     err = esp_a2d_sink_connect(source_bda);
     if (err){
         ESP_LOGE(AV_TAG, "esp_a2d_source_connect err=%d", err);
@@ -408,29 +423,36 @@ esp_err_t a2dp_sink_connect_to_source(bt_a2dp_obj_t *obj, esp_bd_addr_t source_b
 }
 
 esp_err_t a2dp_sink_disconnect(bt_a2dp_obj_t *obj){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
+
+    if(obj->state == A2DP_OBJ_INITED){
+        ESP_LOGE(AV_TAG, "[%s] not started", __func__);
+        return ESP_ERR_INVALID_STATE;
+    }
+    // disconnect possible when not in connected state
 
     ESP_LOGI(AV_TAG, "disconnect a2dp: %s", _bd_addr_to_str(obj->last_connection));
 
     // Prevent automatic reconnect
-    obj->autoreconnect_allowed = false;
+    //obj->autoreconnect_allowed = false;
 
     esp_err_t err = esp_a2d_sink_disconnect(obj->last_connection);
     if (err) {
         ESP_LOGE(AV_TAG, "[%s] disconnecting err=%d",__func__, err);
     }
-
     return err;
 }
 
 esp_err_t a2dp_get_connected_addr(bt_a2dp_obj_t *obj, esp_bd_addr_t *remote_bda){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
-        return ESP_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_STATE;
     }
+
+    // in every state possible default return = {0,0,0,0,0,0}
 
     ESP_LOGI(AV_TAG, "[%s] bda: %s -> [%d,%d,%d,%d,%d,%d]",
                     __func__,
@@ -447,16 +469,18 @@ esp_err_t a2dp_get_connected_addr(bt_a2dp_obj_t *obj, esp_bd_addr_t *remote_bda)
 }
 
 bool a2dp_is_connected(bt_a2dp_obj_t *obj){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return false;
     }
+
+    // in every state possible default connection_state = ESP_A2D_CONNECTION_STATE_DISCONNECTED
     return obj->connection_state == ESP_A2D_CONNECTION_STATE_CONNECTED;
 }
 
 // not defined in API for now
 void a2dp_set_autoreconnect(bt_a2dp_obj_t *obj, bool state){
-    if (!obj) {
+    if(!obj) { // determines in IDLE state (not initalized)
         ESP_LOGE(AV_TAG, "[%s] bt_a2dp_obj_t is NULL", __func__);
         return;
     }
