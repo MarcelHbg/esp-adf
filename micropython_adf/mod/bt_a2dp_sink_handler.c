@@ -229,6 +229,7 @@ bt_a2dp_obj_t *a2dp_init_bt(const char *device_name){
             free(obj);
             return NULL;
         }
+        while(esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED){}
     }
     ESP_LOGI(AV_TAG, "bt controller enabled");
 
@@ -297,6 +298,7 @@ esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
             ESP_LOGE(AV_TAG,"[%s] esp_bluedroid_init err=%d", __func__, err);
             return err;
         }
+        while(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_UNINITIALIZED){}
     }
     ESP_LOGI(AV_TAG,"bluedroid initialized");
 
@@ -307,7 +309,7 @@ esp_err_t a2dp_sink_start(bt_a2dp_obj_t *obj){
             ESP_LOGE(AV_TAG, "[%s] bluedroid enable err=%d", __func__, err);
             return err;
         }
-        while(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED){}
+        while(esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_INITIALIZED){}
     }
     ESP_LOGI(AV_TAG,"bluedroid enabled"); 
 
@@ -387,10 +389,6 @@ esp_err_t a2dp_set_bt_connectable(bt_a2dp_obj_t *obj, bool connectable) {
 
     if(obj->state == A2DP_OBJ_STATE_INITED){
         ESP_LOGE(AV_TAG, "[%s] not started", __func__);
-        return ESP_ERR_INVALID_STATE;
-    }
-    if(obj->state == A2DP_OBJ_STATE_CONNECTED){
-        ESP_LOGE(AV_TAG, "[%s] allready connected", __func__);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -867,13 +865,13 @@ void hdl_stack_evt(uint16_t event, void *p_param)
                 memcpy(obj_g->peer_bd_addr, obj_g->last_connection, ESP_BD_ADDR_LEN);
                 reconnect();
             }
+            
+            obj_g->state = A2DP_OBJ_STATE_STARTED;
 
             /* set discoverable and connectable mode, wait to be connected */
             ESP_LOGI(AV_TAG, "a2dp_set_bt_connectable(true)");
             a2dp_set_bt_connectable(obj_g, true);
             break;
-
-            obj_g->state = A2DP_OBJ_STATE_STARTED;
         }
 
         default:

@@ -152,8 +152,6 @@ STATIC esp_err_t periph_event_cb(audio_event_iface_msg_t *msg, void *ctx)
 
 STATIC esp_audio_handle_t audio_player_create(bool enable_board)
 {
-    esp_err_t ret = ESP_OK;
-
     // logging
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
