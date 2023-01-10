@@ -65,7 +65,10 @@ static void bt_a2d_sink_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
                     audio_element_report_status(a2dp_sink_stream_handle, AEL_STATUS_INPUT_DONE);
                 }
                 if (bt_avrc_periph) {
-                    esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_DISCONNECTED, NULL, 0);
+                    if(param->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_ABNORMAL)
+                        esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_CONNECTION_LOST, NULL, 0);
+                    else
+                        esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_DISCONNECTED, NULL, 0);
                 }
             } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
                 ESP_LOGI(TAG, "A2DP connection state =  CONNECTED");

@@ -60,6 +60,7 @@ typedef enum {
     PERIPH_BLUETOOTH_AUDIO_STARTED,     /*!< The audio session has been started */
     PERIPH_BLUETOOTH_AUDIO_SUSPENDED,   /*!< The audio session has been suspended */
     PERIPH_BLUETOOTH_AUDIO_STOPPED,     /*!< The audio session has been stopped */
+    PERIPH_BLUETOOTH_CONNECTION_LOST,
 } periph_bluetooth_event_id_t;
 
 /**
