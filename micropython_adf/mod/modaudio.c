@@ -34,6 +34,8 @@
 
 #include "audio_mem.h"
 
+#include "esp_log.h"
+
 const char *verno = "0.5-beta1";
 
 STATIC mp_obj_t audio_mem_info(void)
@@ -58,6 +60,14 @@ STATIC mp_obj_t audio_mod_verno(void)
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(audio_mod_verno_obj, audio_mod_verno);
 
+STATIC mp_obj_t audio_enable_log(void){
+    // logging
+    esp_log_level_set("*", ESP_LOG_WARN);
+    esp_log_level_set("MPY_AUDIO", ESP_LOG_VERBOSE);
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_0(audio_enable_log_obj, audio_enable_log);
+
 extern const mp_obj_type_t audio_player_type;
 extern const mp_obj_type_t audio_recorder_type;
 
@@ -65,6 +75,7 @@ STATIC const mp_rom_map_elem_t audio_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audio) },
     { MP_ROM_QSTR(MP_QSTR_mem_info), MP_ROM_PTR(&audio_mem_info_obj) },
     { MP_ROM_QSTR(MP_QSTR_verno), MP_ROM_PTR(&audio_mod_verno_obj) },
+    { MP_ROM_QSTR(MP_QSTR_enable_log), MP_ROM_PTR(&audio_enable_log_obj) },
 
     { MP_ROM_QSTR(MP_QSTR_player), MP_ROM_PTR(&audio_player_type) },
     { MP_ROM_QSTR(MP_QSTR_recorder), MP_ROM_PTR(&audio_recorder_type) },
