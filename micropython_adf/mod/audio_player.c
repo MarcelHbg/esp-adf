@@ -63,11 +63,11 @@ typedef struct _audio_player_obj_t {
     esp_audio_handle_t player;
     esp_audio_state_t state;
 
-    bool is_connected;
+    bool bt_connected;
+    bool bt_enabled;
     esp_bd_addr_t peer_bda;
     esp_periph_handle_t bt_periph;
     esp_periph_set_handle_t periph_set;
-    audio_event_iface_msg_t bt_event;
     mp_obj_t bt_callback;
 } audio_player_obj_t;
 
@@ -132,13 +132,37 @@ STATIC int _http_stream_event_handle(http_stream_event_msg_t *msg)
 STATIC const char *_bda_to_str(esp_bd_addr_t bda){
     static char _str[BD_ADDR_STR_LEN] = {0};
     snprintf(_str, BD_ADDR_STR_LEN, ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(bda));
+    _str[BD_ADDR_STR_LEN - 1] = '\0';
     return _str;
 }
 
-STATIC void _str_to_bda(const char *str, esp_bd_addr_t *bda){
-    unsigned int _bda[] = {0,0,0,0,0,0};
-    sscanf(str, ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(&_bda));
-    memcpy(*bda, _bda, sizeof(esp_bd_addr_t));
+STATIC uint8_t *_str_to_bda(const char *str){
+    unsigned int _raw_bda[ESP_BD_ADDR_LEN];
+    sscanf(str, "%x:%x:%x:%x:%x:%x", ESP_BD_ADDR_HEX(&_raw_bda));
+    static uint8_t _bda[ESP_BD_ADDR_LEN]; 
+    for(int i = 0; i<ESP_BD_ADDR_LEN; i++){
+        _bda[i] = _raw_bda[i];
+    }
+    ESP_LOGI(TAG, "[%s] str=%s addr=%s", __func__, str, _bda_to_str(_bda));
+    return _bda;
+}
+
+STATIC esp_err_t audio_player_bt_connectable(bool enable){
+    esp_err_t err = ESP_OK;
+
+    if(enable)
+        err = esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
+    else
+        err = esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_NONE);
+    
+    if(err){
+        ESP_LOGE(TAG, "[%s] err=%d",__func__, err);
+    }
+    else{
+        ESP_LOGI(TAG, "Bluetooth %s", enable ? "enabled" : "disabled");
+    }
+
+    return err;
 }
 
 STATIC esp_err_t periph_event_cb(audio_event_iface_msg_t *msg, void *ctx){
@@ -155,8 +179,14 @@ STATIC esp_err_t periph_event_cb(audio_event_iface_msg_t *msg, void *ctx){
             memcpy(self->peer_bda, _bda, sizeof(esp_bd_addr_t));
         }
         // save connection state
-        if(msg->cmd == PERIPH_BLUETOOTH_CONNECTED) self->is_connected = true;
-        if(msg->cmd == PERIPH_BLUETOOTH_DISCONNECTED) self->is_connected = false;
+        if(msg->cmd == PERIPH_BLUETOOTH_CONNECTED){
+            self->bt_connected = true;
+            audio_player_bt_connectable(false);
+        } 
+        if(msg->cmd == PERIPH_BLUETOOTH_DISCONNECTED){
+            self->bt_connected = false;
+            if(self->bt_enabled) audio_player_bt_connectable(true);
+        }
         // run mp callback if set
         if (self->bt_callback != mp_const_none) {
             mp_obj_dict_t *dict = mp_obj_new_dict(2);
@@ -182,8 +212,8 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name)
     esp_err_t ret = ESP_OK;
 
     // logging
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    //esp_log_level_set("*", ESP_LOG_INFO);
+    //esp_log_level_set(TAG, ESP_LOG_DEBUG);
 
     ESP_LOGI(TAG, "Create Audio player");
 
@@ -297,6 +327,8 @@ STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, 
     self->bt_callback = mp_const_none;
     esp_bd_addr_t _bda = {0,0,0,0,0,0};
     memcpy(self->peer_bda, _bda, sizeof(esp_bd_addr_t));
+    self->bt_connected = false;
+    self->bt_enabled = false;
 
     return MP_OBJ_FROM_PTR(self);
 }
@@ -336,27 +368,53 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_KW(audio_player_bt_callback_obj, 2, audio_player_
 
 STATIC mp_obj_t audio_player_bt_enable(mp_obj_t self_in, mp_obj_t enable){
     audio_player_obj_t *self = self_in;
+
+    if(!self->bt_periph){
+        mp_raise_ValueError("Bluetooth peripheral not initialized");
+        return mp_const_none;
+    }
+
     bool _enable = mp_obj_is_true(enable);
+
     esp_err_t err = ESP_OK;
 
-    if(_enable)
-        err = esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_CONNECTABLE_DISCOVERABLE);
-    else{
-        err = esp_bt_gap_set_scan_mode(ESP_BT_SCAN_MODE_NONE);
-        if(self->is_connected)
-            err |= esp_a2d_sink_disconnect(self->peer_bda);
-    }
+    self->bt_enabled = _enable;
 
-    if(err){
-        ESP_LOGE(TAG, "%s err=%d",__func__, err);
+    if(!_enable && self->bt_connected){
+        err |= esp_a2d_sink_disconnect(self->peer_bda);
+        if(err){
+            ESP_LOGE(TAG, "[%s] err=%d",__func__, err);
+        }
     }
-    else{
-        ESP_LOGI(TAG, "Bluetooth %s", _enable ? "enabled" : "disabled");
-    }
+    else
+        err = audio_player_bt_connectable(_enable);
 
     return mp_obj_new_int(err);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(audio_player_bt_enable_obj, audio_player_bt_enable);
+
+STATIC mp_obj_t audio_player_bt_connect_to(mp_obj_t self_in, mp_obj_t bda_str){
+    audio_player_obj_t *self = self_in;
+    const char *_bda_str = mp_obj_str_get_str(bda_str);
+    esp_err_t err = ESP_OK;
+
+    if(!self->bt_enabled || self->bt_connected){
+        return mp_const_none;
+    }
+
+    if(!_bda_str){
+        mp_raise_TypeError("given bda string invalid");
+        return mp_const_none;
+    }
+
+    err = esp_a2d_sink_connect(_str_to_bda(_bda_str));
+    if(err){
+        ESP_LOGE(TAG, "%s err=%d",__func__, err);
+    }
+
+    return mp_obj_new_int(err);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(audio_player_bt_connect_to_obj, audio_player_bt_connect_to);
 
 /********************************************************************************************************/
 
@@ -544,6 +602,7 @@ STATIC const mp_rom_map_elem_t player_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_time), MP_ROM_PTR(&audio_player_time_obj) },
     { MP_ROM_QSTR(MP_QSTR_bt_callback), MP_ROM_PTR(&audio_player_bt_callback_obj) },
     { MP_ROM_QSTR(MP_QSTR_bt_enable), MP_ROM_PTR(&audio_player_bt_enable_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bt_connect_to), MP_ROM_PTR(&audio_player_bt_connect_to_obj) },
     
     // bt_event_t
     { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_UNKNOWN         ), MP_ROM_INT(PERIPH_BLUETOOTH_UNKNOWN) },                   /*!< No event */

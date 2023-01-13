@@ -53,10 +53,11 @@ static void bt_a2d_sink_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
         a2dp_user_callback.user_a2d_cb(event, param);
     }
     esp_a2d_cb_param_t *a2d = NULL;
+    uint8_t *bda = NULL;
     switch (event) {
         case ESP_A2D_CONNECTION_STATE_EVT:
             a2d = (esp_a2d_cb_param_t *)(param);
-            uint8_t *bda = a2d->conn_stat.remote_bda;
+            bda = a2d->conn_stat.remote_bda;
             ESP_LOGI(TAG, "A2DP bd address:, [%02x:%02x:%02x:%02x:%02x:%02x]",
                      bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
             if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
@@ -65,29 +66,30 @@ static void bt_a2d_sink_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
                     audio_element_report_status(a2dp_sink_stream_handle, AEL_STATUS_INPUT_DONE);
                 }
                 if (bt_avrc_periph) {
-                    esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_DISCONNECTED, NULL, 0);
+                    esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_DISCONNECTED, (void *)bda, sizeof(esp_bd_addr_t));
                 }
             } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
                 ESP_LOGI(TAG, "A2DP connection state =  CONNECTED");
                 if (bt_avrc_periph) {
-                    esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_CONNECTED, NULL, 0);
+                    esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_CONNECTED, (void *)bda, sizeof(esp_bd_addr_t));
                 }
             }
             break;
 
         case ESP_A2D_AUDIO_STATE_EVT:
             a2d = (esp_a2d_cb_param_t *)(param);
+            bda = a2d->audio_stat.remote_bda;
             ESP_LOGD(TAG, "A2DP audio state: %s", audio_state_str[a2d->audio_stat.state]);
             if (bt_avrc_periph == NULL) {
                 break;
             }
 
             if (ESP_A2D_AUDIO_STATE_STARTED == a2d->audio_stat.state) {
-                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_STARTED, NULL, 0);
+                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_STARTED, (void *)bda, sizeof(esp_bd_addr_t));
             } else if (ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND == a2d->audio_stat.state) {
-                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_SUSPENDED, NULL, 0);
+                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_SUSPENDED, (void *)bda, sizeof(esp_bd_addr_t));
             } else if (ESP_A2D_AUDIO_STATE_STOPPED == a2d->audio_stat.state) {
-                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_STOPPED, NULL, 0);
+                esp_periph_send_event(bt_avrc_periph, PERIPH_BLUETOOTH_AUDIO_STOPPED, (void *)bda, sizeof(esp_bd_addr_t));
             }
             break;
 
