@@ -33,9 +33,8 @@
 #include "audio_hal.h"
 #include "board.h"
 
-#include "amr_decoder.h"
-#include "mp3_decoder.h"
-#include "wav_decoder.h"
+#include "mp3_decoder.h" // http/ file mp3 stream
+#include "aac_decoder.h" // http aac stream
 
 #include "pcm_decoder.h" // decoder for bt stream
 
@@ -266,21 +265,16 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name){
     esp_audio_input_stream_add(player, bt_stream_reader);
 
     // add decoder
-    // mp3
+    // mp3 for file/http stream
     ESP_LOGI(TAG, "Initialize mp3 Decoder");
     mp3_decoder_cfg_t mp3_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
     mp3_dec_cfg.task_core = 1;
     esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, mp3_decoder_init(&mp3_dec_cfg));
-    // amr
-    ESP_LOGI(TAG, "Initialize amr Decoder");
-    amr_decoder_cfg_t amr_dec_cfg = DEFAULT_AMR_DECODER_CONFIG();
-    amr_dec_cfg.task_core = 1;
-    esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, amr_decoder_init(&amr_dec_cfg));
-    // wav
-    ESP_LOGI(TAG, "Initialize wav Decoder");
-    wav_decoder_cfg_t wav_dec_cfg = DEFAULT_WAV_DECODER_CONFIG();
-    wav_dec_cfg.task_core = 1;
-    esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, wav_decoder_init(&wav_dec_cfg));
+    // aac for http stream
+    ESP_LOGI(TAG, "Initialize aac Decoder");
+    aac_decoder_cfg_t aac_dec_cfg = DEFAULT_AAC_DECODER_CONFIG();
+    aac_dec_cfg.task_core = 1;
+    esp_audio_codec_lib_add(player, AUDIO_CODEC_TYPE_DECODER, aac_decoder_init(&aac_dec_cfg));
     // pcm for bt stream
     ESP_LOGI(TAG, "Initialize pcm Decoder");
     pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_PCM_DECODER_CONFIG();
