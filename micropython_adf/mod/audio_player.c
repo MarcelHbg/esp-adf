@@ -64,11 +64,15 @@ typedef struct _audio_player_obj_t {
 
     bool bt_connected;
     bool bt_enabled;
+    bool bt_scanning;
     esp_bd_addr_t peer_bda;
+    esp_bd_addr_t scan_bda;
     esp_periph_handle_t bt_periph;
     esp_periph_set_handle_t periph_set;
     mp_obj_t bt_callback;
 } audio_player_obj_t;
+
+STATIC audio_player_obj_t *g_audio_player = NULL;
 
 STATIC const qstr player_info_fields[] = {
     MP_QSTR_input, MP_QSTR_codec
@@ -204,6 +208,37 @@ STATIC esp_err_t periph_event_cb(audio_event_iface_msg_t *msg, void *ctx){
     return ESP_OK;
 }
 
+
+STATIC void gap_event_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param){
+    switch (event){
+    case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+        if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED){
+            g_audio_player->bt_scanning = true;
+            ESP_LOGI(TAG, "bluetooth scanning ...");
+        }
+        else {
+            g_audio_player->bt_scanning = false;
+            ESP_LOGI(TAG, "bluetooth scanning stopped");
+        }
+        break;
+    
+    case ESP_BT_GAP_DISC_RES_EVT:
+        ESP_LOGI(TAG, "discoverd bda: %s", _bda_to_str(param->disc_res.bda));
+        memcpy(g_audio_player->scan_bda, param->disc_res.bda, sizeof(esp_bd_addr_t));
+        break;
+    
+    case ESP_BT_GAP_CFM_REQ_EVT:
+        ESP_LOGI(TAG, "confirmation bda: %s", _bda_to_str(param->cfm_req.bda));
+        break;
+
+    case ESP_BT_GAP_AUTH_CMPL_EVT:
+        ESP_LOGI(TAG, "authentication bda: %s", _bda_to_str(param->auth_cmpl.bda));
+        break;
+
+    default:
+        break;
+    }
+}
 /********************************************************************************************************/
 
 STATIC esp_audio_handle_t audio_player_create(const char *device_name){
@@ -219,6 +254,7 @@ STATIC esp_audio_handle_t audio_player_create(const char *device_name){
     ret |= esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
     ret |= esp_bluedroid_init();
     ret |= esp_bluedroid_enable();
+    ret |= esp_bt_gap_register_callback(gap_event_cb);
     if (device_name) ret |= esp_bt_dev_set_device_name(device_name);
     else ret |= esp_bt_dev_set_device_name("ESP_MPY_SPEAKER");
     ESP_LOGI(TAG, "BT controller startet (return: %d)", ret);
@@ -316,9 +352,12 @@ STATIC mp_obj_t audio_player_make_new(const mp_obj_type_t *type, size_t n_args, 
     self->bt_callback = mp_const_none;
     esp_bd_addr_t _bda = {0,0,0,0,0,0};
     memcpy(self->peer_bda, _bda, sizeof(esp_bd_addr_t));
+    memcpy(self->scan_bda, _bda, sizeof(esp_bd_addr_t));
     self->bt_connected = false;
     self->bt_enabled = false;
+    self->bt_scanning = false;
 
+    g_audio_player = self;
     return MP_OBJ_FROM_PTR(self);
 }
 
@@ -404,6 +443,60 @@ STATIC mp_obj_t audio_player_bt_connect_to(mp_obj_t self_in, mp_obj_t bda_str){
     return mp_obj_new_int(err);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(audio_player_bt_connect_to_obj, audio_player_bt_connect_to);
+
+STATIC mp_obj_t audio_player_bt_scan_for(mp_obj_t self_in, mp_obj_t bda_str){
+    audio_player_obj_t *self = self_in;
+    const char *_bda_str = mp_obj_str_get_str(bda_str);
+
+    if(!_bda_str){
+        mp_raise_TypeError("given bda string invalid");
+        return mp_const_none;
+    }
+
+    esp_err_t err = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    if(err){
+        ESP_LOGE(TAG, "%s err=%d",__func__, err);
+        return mp_obj_new_int(err);
+    }
+
+    esp_bd_addr_t search_bda = {0,0,0,0,0,0};
+    memcpy(search_bda, _str_to_bda(_bda_str), sizeof(esp_bd_addr_t));
+
+    const TickType_t xDelay = 100 / portTICK_PERIOD_MS;
+    vTaskDelay(xDelay);
+
+    while (self->bt_scanning){
+        if (memcmp(search_bda, self->scan_bda, sizeof(esp_bd_addr_t)) == 0) {
+            esp_bt_gap_cancel_discovery();
+            return mp_obj_new_int(ESP_OK);
+        }
+        const TickType_t xDelay = 10 / portTICK_PERIOD_MS;
+        vTaskDelay(xDelay);
+    }
+
+    return mp_obj_new_int(ESP_FAIL);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(audio_player_bt_scan_for_obj, audio_player_bt_scan_for);
+
+STATIC mp_obj_t audio_player_bt_periph_cmd(mp_obj_t self_in, mp_obj_t cmd){
+    audio_player_obj_t *self = self_in;
+    const char *_cmd = mp_obj_str_get_str(cmd);
+
+    if(!_cmd){
+        mp_raise_TypeError("given cmd string invalid");
+        return mp_const_none;
+    }
+
+    if (!memcmp(_cmd, "play", 4))
+        return mp_obj_new_int(periph_bt_play(self->bt_periph));
+    else if (!memcmp(_cmd, "pause", 5))
+        return mp_obj_new_int(periph_bt_pause(self->bt_periph));
+    else if (!memcmp(_cmd, "stop", 4))
+        return mp_obj_new_int(periph_bt_stop(self->bt_periph));
+    else
+        return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(audio_player_bt_periph_cmd_obj, audio_player_bt_periph_cmd);
 
 /********************************************************************************************************/
 
@@ -592,6 +685,8 @@ STATIC const mp_rom_map_elem_t player_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_bt_callback), MP_ROM_PTR(&audio_player_bt_callback_obj) },
     { MP_ROM_QSTR(MP_QSTR_bt_enable), MP_ROM_PTR(&audio_player_bt_enable_obj) },
     { MP_ROM_QSTR(MP_QSTR_bt_connect_to), MP_ROM_PTR(&audio_player_bt_connect_to_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bt_scan_for), MP_ROM_PTR(&audio_player_bt_scan_for_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bt_send_cmd), MP_ROM_PTR(&audio_player_bt_periph_cmd_obj) },
     
     // bt_event_t
     { MP_ROM_QSTR(MP_QSTR_BLUETOOTH_UNKNOWN         ), MP_ROM_INT(PERIPH_BLUETOOTH_UNKNOWN) },                   /*!< No event */
